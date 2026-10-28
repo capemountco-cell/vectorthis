@@ -142,3 +142,9 @@
     color: var(--color-foreground);
   }
 }
+
+.checker {
+  background-color: var(--color-background);
+  background-image: conic-gradient(var(--color-muted) 25%, transparent 0 50%, var(--color-muted) 0 75%, transparent 0);
+  background-size: 20px 20px;
+}
