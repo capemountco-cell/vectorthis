@@ -2,6 +2,21 @@ import { describe, expect, it } from "vitest";
 import { buildLogoPrompt } from "@/lib/logo-prompt";
 
 describe("Logo recreation requirements", () => {
+  it("recreates original lettering and artwork without replacement text", () => {
+    const prompt = buildLogoPrompt("", "", "recreate");
+    expect(prompt).toContain("without replacing any text");
+    expect(prompt).toContain("If there is no text, reproduce only the original artwork");
+    expect(prompt).toContain("Convert the logo itself to solid black");
+    expect(prompt).toContain("Remove the entire photo, scene, surface, background");
+    expect(prompt).not.toContain("REQUIRED WORDMARK:");
+  });
+
+  it("corrects recreation using the original without inventing replacement wording", () => {
+    const prompt = buildLogoPrompt("", "restore the curve", "recreate");
+    expect(prompt).toContain("Image 1 is the generated draft to correct. Image 2 is the original uploaded logo");
+    expect(prompt).toContain("Corrections must not change the original wording or lettering style");
+    expect(prompt).not.toContain("REQUIRED WORDMARK:");
+  });
   it("preserves exact replacement case instead of matching the original case", () => {
     const prompt = buildLogoPrompt("Bridgt");
     expect(prompt).toContain('REQUIRED WORDMARK: "Bridgt". Render it exactly once.');

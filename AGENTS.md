@@ -11,3 +11,4 @@
 
 - Keep logo edit instructions in the shared prompt builder, with reference roles matching upload order, so exact-text and correction fidelity rules can be regression-tested without live AI calls.
 - Export saves distinguish mobile devices (including iPads with desktop user agents) from desktop computers: desktop downloads prepared Files via blob URLs, while mobile PNG saves synchronously invoke Web Share with explicit errors and no link fallback to avoid navigating away.
+- Logo requests carry an explicit replacement or recreation mode through the shared prompt builder; prepare both PNG backgrounds from the same cropped pixels before saving so background changes never require inference or delay native sharing.
