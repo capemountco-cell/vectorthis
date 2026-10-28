@@ -17,21 +17,23 @@ export const Route = createFileRoute("/")({
   component: Index,
 });
 
-async function save(href: string, name: string, type: string) {
-  const blob = await (await fetch(href)).blob();
-  const file = new File([blob], name, { type });
+function toFile(href: string, name: string, type: string) {
+  const bin = href.startsWith("data:") && href.includes(";base64,")
+    ? Uint8Array.from(atob(href.split(",")[1]!), (c) => c.charCodeAt(0))
+    : new TextEncoder().encode(href);
+  return new File([bin], name, { type });
+}
+
+// Must be called directly from the tap (no awaits before share) or iPhone opens the image instead.
+function save(file: File) {
   if (navigator.canShare?.({ files: [file] })) {
-    try {
-      await navigator.share({ files: [file] });
-      return;
-    } catch (e) {
-      if ((e as DOMException).name === "AbortError") return;
-    }
+    navigator.share({ files: [file] }).catch(() => {});
+    return;
   }
-  const url = URL.createObjectURL(blob);
+  const url = URL.createObjectURL(file);
   const a = document.createElement("a");
   a.href = url;
-  a.download = name;
+  a.download = file.name;
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -44,7 +46,8 @@ function Index() {
   const [text, setText] = useState("");
   const [frame, setFrame] = useState<string | null>(null);
   const [final, setFinal] = useState(false);
-  const [out, setOut] = useState<{ png: string; svg: string } | null>(null);
+  const [out, setOut] = useState<{ png: string; svg: string; pngFile: File; svgFile: File } | null>(null);
+  const [progress, setProgress] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,6 +58,9 @@ function Index() {
     setOut(null);
     setFrame(null);
     setFinal(false);
+    setProgress(2);
+    const start = Date.now();
+    const timer = setInterval(() => setProgress((p) => Math.max(p, Math.min(90, 90 * (1 - Math.exp(-(Date.now() - start) / 25000))))), 300);
     try {
       const form = new FormData();
       form.append("image", file);
@@ -62,13 +68,21 @@ function Index() {
       let last = "";
       await streamImage("/api/edit-image", form, (src, isFinal) => {
         setFrame(src);
+        setProgress((p) => Math.max(p, isFinal ? 92 : 60));
         setFinal(isFinal);
         if (isFinal) last = src;
       });
-      if (last) setOut(await toOutputs(last));
+      if (last) {
+        setProgress(95);
+        const o = await toOutputs(last);
+        const slug = text.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "logo";
+        setOut({ ...o, pngFile: toFile(o.png, `${slug}.png`, "image/png"), svgFile: toFile(o.svg, `${slug}.svg`, "image/svg+xml") });
+        setProgress(100);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong");
     } finally {
+      clearInterval(timer);
       setBusy(false);
     }
   }
@@ -127,22 +141,33 @@ function Index() {
           disabled={!file || !text.trim() || busy}
           className="h-12 rounded-xl bg-primary px-5 font-bold text-primary-foreground disabled:opacity-40"
         >
-          {busy ? "…" : "Create"}
+          {busy ? `${Math.round(progress)}%` : "Create"}
         </button>
       </div>
+
+      {busy && (
+        <div className="flex flex-col gap-1">
+          <div className="h-2 overflow-hidden rounded-full bg-muted">
+            <div className="h-full rounded-full bg-primary transition-[width] duration-300" style={{ width: `${progress}%` }} />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {progress < 60 ? "Reading your logo…" : progress < 92 ? "Drawing new text…" : "Preparing files…"} {Math.round(progress)}%
+          </p>
+        </div>
+      )}
 
       {error && <p className="text-sm text-destructive">{error}</p>}
 
       {out && (
         <div className="grid grid-cols-2 gap-2">
           <button
-            onClick={() => save(out.png, `${slug}.png`, "image/png")}
+            onClick={() => save(out.pngFile)}
             className="h-12 rounded-xl bg-primary font-bold text-primary-foreground"
           >
             Save PNG to Photos
           </button>
           <button
-            onClick={() => save(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(out.svg)}`, `${slug}.svg`, "image/svg+xml")}
+            onClick={() => save(out.svgFile)}
             className="h-12 rounded-xl border-2 border-foreground font-bold"
           >
             Save SVG
