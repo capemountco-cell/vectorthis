@@ -1,0 +1,3 @@
+- [ ] Add recreate-only mode with original lettering preserved, including corrections.
+- [ ] Add transparent/white PNG selection while preserving mobile and desktop saving.
+- [ ] Verify recreation, background pixels, correction references, and exports.
