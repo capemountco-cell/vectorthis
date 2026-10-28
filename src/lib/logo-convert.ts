@@ -1,4 +1,6 @@
-// Turns a black-on-white image into a transparent PNG and a traced SVG (browser only).
+import { withWhiteBackground } from "@/lib/png-background";
+
+// Turns a black-on-white image into PNG variants and a traced SVG (browser only).
 async function loadPixels(src: string) {
   const img = new Image();
   img.src = src;
@@ -67,9 +69,7 @@ export async function toOutputs(src: string) {
   // drop white paths so background is transparent
   svg = svg.replace(/<path[^>]*fill="rgb\(255,255,255\)"[^>]*\/>/g, "");
   // Composite the same cropped pixels onto white, without another AI request.
-  ctx.globalCompositeOperation = "destination-over";
-  ctx.fillStyle = "#fff";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.putImageData(new ImageData(withWhiteBackground(cd), cropped.width, cropped.height), 0, 0);
   const whitePng = canvas.toDataURL("image/png");
   return { png, whitePng, svg };
 }
