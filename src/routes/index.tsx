@@ -40,6 +40,8 @@ function saveSvg(file: File) {
 function Index() {
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
+  const [shape, setShape] = useState<File | null>(null);
+  const [shapePreview, setShapePreview] = useState<string | null>(null);
   const [text, setText] = useState("");
   const [mode, setMode] = useState<LogoMode>("replace");
   const [background, setBackground] = useState("transparent");
@@ -67,7 +69,7 @@ function Index() {
   }
 
   async function run(correction?: string) {
-    if (!file || (mode === "replace" && !text.trim())) return;
+    if (!file || (mode === "replace" && !text.trim()) || (mode === "blend" && !shape)) return;
     setBusy(true);
     setError(null);
     setSaveError(null);
@@ -79,13 +81,14 @@ function Index() {
     const timer = setInterval(() => setProgress((p) => Math.max(p, Math.min(90, 90 * (1 - Math.exp(-(Date.now() - start) / 25000))))), 300);
     try {
       const form = new FormData();
+      const multi = mode === "blend" || (correction && raw);
+      const key = multi ? "image[]" : "image";
       if (correction && raw) {
-        form.append("image[]", new File([toFile(raw, "draft.png", "image/png")], "draft.png", { type: "image/png" }));
-        form.append("image[]", file);
+        form.append(key, new File([toFile(raw, "draft.png", "image/png")], "draft.png", { type: "image/png" }));
         form.append("fix", correction);
-      } else {
-        form.append("image", file);
       }
+      form.append(key, file);
+      if (mode === "blend" && shape) form.append(key, shape);
       form.append("text", text.trim());
       form.append("mode", mode);
       let last = "";
