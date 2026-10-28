@@ -8,3 +8,5 @@
 > Commits you push to the connected branch sync back to Lovable and show up in
 > the editor, so keep the branch in a working state.
 <!-- LOVABLE:END -->
+
+- Keep logo edit instructions in the shared prompt builder, with reference roles matching upload order, so exact-text and correction fidelity rules can be regression-tested without live AI calls.
