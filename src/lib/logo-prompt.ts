@@ -1,10 +1,15 @@
 // Reference order matches the multipart upload in the logo editor.
 export type LogoMode = "replace" | "recreate" | "blend";
 
+export const TIGHT_NESTING = "TIGHT NESTING: Keep the mirrored composition (180° rotational symmetry) and pull the elements together so they interlock into one compact, roughly square mark. Each element's inner edge must follow the contour of its neighbour (e.g. one note's head tucks into the curve beside the other note's stem), separated only by a single narrow channel of even width — about 4-6% of the mark's width, never wider than the narrowest gap in the original. No open empty space in the centre and no element drifting apart; the elements must never touch or merge.";
+
+
 export const SHAPE_BRIEF_INSTRUCTIONS = [
   "You are briefing an image editor that will see ONLY Image A (the original logo), never Image B. Write a precise redesign brief (max 180 words) that turns Image A into a hybrid: keep Image A's exact composition (same number of separate elements, arrangement, orientation, mirrored/interlocking relationship, footprint, rounded geometry and stroke weight) and reshape EACH element so it takes on Image B's characteristic features.",
   "First list Image A's elements and their positions. Then name Image B's defining features (e.g. round note head, straight stem, curved flag). Then say, element by element, which part becomes which feature and where it sits. The result must still look like Image A's layout, not like Image B alone.",
-  "Minimal change: keep each element's bold solid mass, thickness and footprint — do not thin elements into skinny lines. Map Image A's existing parts onto Image B's parts (e.g. a round bulb end becomes the head; a tapered body becomes a thick stem whose end flares into the flag). The pieces should stay compact and nest together with the same narrow, consistent gap between them as in Image A, reading as one tight unified mark. Output only the brief.",
+  "Minimal change: keep each element's bold solid mass, thickness and footprint — do not thin elements into skinny lines. Map Image A's existing parts onto Image B's parts (e.g. a round bulb end becomes the head; a tapered body becomes a thick stem whose end flares into the flag).",
+  TIGHT_NESTING,
+  "Include the TIGHT NESTING requirement explicitly in the brief, with where each element's inner edge sits against the other. Output only the brief.",
 ].join("\n");
 
 export function buildLogoPrompt(text: string, correction = "", mode: LogoMode = "replace", brief = "") {
