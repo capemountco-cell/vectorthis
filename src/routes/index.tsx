@@ -1,8 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { streamImage } from "@/lib/stream-image";
 import { toOutputs } from "@/lib/logo-convert";
-import { savePng } from "@/lib/save-png";
+import { downloadFile, isMobileSaveDevice, savePng } from "@/lib/save-png";
 import { Button } from "@/components/ui/button";
 
 export const Route = createFileRoute("/")({
@@ -21,25 +21,18 @@ export const Route = createFileRoute("/")({
 
 function toFile(href: string, name: string, type: string) {
   const bin = href.startsWith("data:") && href.includes(";base64,")
-    ? Uint8Array.from(atob(href.split(",")[1]!), (c) => c.charCodeAt(0))
+    ? Uint8Array.from(atob(href.split(",")[1] ?? ""), (c) => c.charCodeAt(0))
     : new TextEncoder().encode(href);
   return new File([bin], name, { type });
 }
 
 // Must be called directly from the tap (no awaits before share) or iPhone opens the image instead.
 function saveSvg(file: File) {
-  if (typeof navigator.share === "function" && navigator.canShare?.({ files: [file] })) {
+  if (isMobileSaveDevice() && typeof navigator.share === "function" && navigator.canShare?.({ files: [file] })) {
     navigator.share({ files: [file] }).catch(() => {});
     return;
   }
-  const url = URL.createObjectURL(file);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = file.name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 30000);
+  downloadFile(file);
 }
 
 function Index() {
@@ -56,6 +49,8 @@ function Index() {
   const [error, setError] = useState<string | null>(null);
   const [savingPng, setSavingPng] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [mobileSave, setMobileSave] = useState(false);
+  useEffect(() => setMobileSave(isMobileSaveDevice()), []);
 
   async function run(correction?: string) {
     if (!file || !text.trim()) return;
@@ -188,14 +183,15 @@ function Index() {
             disabled={savingPng}
             className="h-12 whitespace-normal rounded-xl px-2 font-bold"
           >
-            {savingPng ? "Opening save options…" : "Save PNG to Photos"}
+             {savingPng ? (mobileSave ? "Opening save options…" : "Downloading…") : (mobileSave ? "Save PNG to Photos" : "Download PNG")}
           </Button>
-          <button
+          <Button
             onClick={() => saveSvg(out.svgFile)}
+            variant="outline"
             className="h-12 rounded-xl border-2 border-foreground font-bold"
           >
-            Save SVG
-          </button>
+            {mobileSave ? "Save SVG" : "Download SVG"}
+          </Button>
         </div>
       )}
       {saveError && <p role="alert" className="text-sm text-destructive">{saveError}</p>}

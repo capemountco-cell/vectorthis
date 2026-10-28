@@ -1,10 +1,34 @@
-export type PngSaveResult = "shared" | "cancelled";
+export type PngSaveResult = "shared" | "cancelled" | "downloaded";
+
+export function isMobileSaveDevice() {
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+    || (/Macintosh/i.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+}
+
+export function downloadFile(file: File) {
+  const url = URL.createObjectURL(file);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = file.name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
 
 const unsupported = "Image sharing is unavailable in this browser. Open the app directly in Safari on iPhone or Chrome on Android, then try Save PNG again. Your logo is still here.";
 
 // Invoke from the click handler with an already-prepared File. Do not await
 // conversion, fetch, or a permission query before calling navigator.share.
 export function savePng(file: File): Promise<PngSaveResult> {
+  if (!isMobileSaveDevice()) {
+    try {
+      downloadFile(file);
+      return Promise.resolve("downloaded");
+    } catch {
+      return Promise.reject(new Error("The PNG could not download. Try Save PNG again. Your logo is still here."));
+    }
+  }
   try {
     if (typeof navigator.share !== "function") {
       return Promise.reject(new Error(unsupported));
