@@ -87,7 +87,6 @@ function Index() {
     }
   }
 
-  const slug = text.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "logo";
 
   const shown = out?.png ?? frame;
 
