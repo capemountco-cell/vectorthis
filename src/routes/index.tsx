@@ -4,14 +4,16 @@ import { streamImage } from "@/lib/stream-image";
 import { toOutputs } from "@/lib/logo-convert";
 import { downloadFile, isMobileSaveDevice, savePng } from "@/lib/save-png";
 import { Button } from "@/components/ui/button";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import type { LogoMode } from "@/lib/logo-prompt";
 
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Relogo — Change the text on any logo" },
-      { name: "description", content: "Upload a logo, type new text, download a black SVG and transparent PNG." },
-      { property: "og:title", content: "Relogo — Change the text on any logo" },
-      { property: "og:description", content: "Upload a logo, type new text, download a black SVG and transparent PNG." },
+      { title: "Relogo — Recreate logos or change their text" },
+      { name: "description", content: "Recreate your logo or replace its text, remove the background, and save black SVGs or transparent and white PNGs." },
+      { property: "og:title", content: "Relogo — Recreate logos or change their text" },
+      { property: "og:description", content: "Recreate your logo or replace its text, remove the background, and save black SVGs or transparent and white PNGs." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
     ],
@@ -39,9 +41,11 @@ function Index() {
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [text, setText] = useState("");
+  const [mode, setMode] = useState<LogoMode>("replace");
+  const [background, setBackground] = useState("transparent");
   const [frame, setFrame] = useState<string | null>(null);
   const [final, setFinal] = useState(false);
-  const [out, setOut] = useState<{ png: string; svg: string; pngFile: File; svgFile: File } | null>(null);
+  const [out, setOut] = useState<{ png: string; whitePng: string; svg: string; pngFile: File; whitePngFile: File; svgFile: File } | null>(null);
   const [progress, setProgress] = useState(0);
   const [raw, setRaw] = useState<string | null>(null);
   const [fix, setFix] = useState("");
@@ -52,8 +56,18 @@ function Index() {
   const [mobileSave, setMobileSave] = useState(false);
   useEffect(() => setMobileSave(isMobileSaveDevice()), []);
 
+  function resetResult() {
+    setOut(null);
+    setFrame(null);
+    setRaw(null);
+    setFinal(false);
+    setFix("");
+    setError(null);
+    setSaveError(null);
+  }
+
   async function run(correction?: string) {
-    if (!file || !text.trim()) return;
+    if (!file || (mode === "replace" && !text.trim())) return;
     setBusy(true);
     setError(null);
     setSaveError(null);
@@ -73,6 +87,7 @@ function Index() {
         form.append("image", file);
       }
       form.append("text", text.trim());
+      form.append("mode", mode);
       let last = "";
       await streamImage("/api/edit-image", form, (src, isFinal) => {
         setFrame(src);
@@ -85,8 +100,8 @@ function Index() {
         setRaw(last);
         setFix("");
         const o = await toOutputs(last);
-        const slug = text.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "logo";
-        setOut({ ...o, pngFile: toFile(o.png, `${slug}.png`, "image/png"), svgFile: toFile(o.svg, `${slug}.svg`, "image/svg+xml") });
+        const slug = mode === "recreate" ? "logo" : text.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "logo";
+        setOut({ ...o, pngFile: toFile(o.png, `${slug}.png`, "image/png"), whitePngFile: toFile(o.whitePng, `${slug}-white.png`, "image/png"), svgFile: toFile(o.svg, `${slug}.svg`, "image/svg+xml") });
         setProgress(100);
       }
     } catch (e) {
@@ -98,16 +113,16 @@ function Index() {
   }
 
 
-  const shown = out?.png ?? frame;
+  const shown = (background === "white" ? out?.whitePng : out?.png) ?? frame;
 
   return (
     <main className="mx-auto flex min-h-screen max-w-md flex-col gap-3 px-4 py-5">
       <header className="flex items-baseline justify-between">
         <h1 className="text-2xl font-black tracking-tight">Relogo</h1>
-        <p className="text-xs text-muted-foreground">Same logo, new text.</p>
+        <p className="text-xs text-muted-foreground">Your logo, recreated.</p>
       </header>
 
-      <div className="checker relative flex aspect-[16/9] items-center justify-center overflow-hidden rounded-xl border border-border">
+      <div className={`${background === "transparent" ? "checker" : "bg-background"} relative flex aspect-[16/9] items-center justify-center overflow-hidden rounded-xl border border-border`}>
         {shown ? (
           <img
             src={shown}
@@ -126,10 +141,14 @@ function Index() {
           <input
             type="file"
             accept="image/*"
+            aria-label="Upload original logo"
+            disabled={busy || savingPng}
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0];
               if (f) {
+                resetResult();
+                if (preview) URL.revokeObjectURL(preview);
                 setFile(f);
                 setPreview(URL.createObjectURL(f));
               }
@@ -138,20 +157,44 @@ function Index() {
         </label>
       </div>
 
+      <ToggleGroup type="single" value={mode} onValueChange={(value) => {
+        if (value === "replace" || value === "recreate") {
+          setMode(value);
+          resetResult();
+        }
+      }} disabled={busy || savingPng} aria-label="Logo mode" className="grid grid-cols-2">
+        <ToggleGroupItem value="replace" className="h-10 border border-border">Change text</ToggleGroupItem>
+        <ToggleGroupItem value="recreate" className="h-10 border border-border">Recreate original</ToggleGroupItem>
+      </ToggleGroup>
+
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-muted-foreground">PNG background</span>
+        <ToggleGroup type="single" value={background} onValueChange={(value) => {
+          if (value) { setBackground(value); setSaveError(null); }
+        }} disabled={savingPng} aria-label="PNG background" className="flex-1">
+          <ToggleGroupItem value="transparent" className="flex-1 text-xs">Transparent</ToggleGroupItem>
+          <ToggleGroupItem value="white" className="flex-1 text-xs">White</ToggleGroupItem>
+        </ToggleGroup>
+      </div>
+
       <div className="flex gap-2">
+        {mode === "replace" && (
         <input
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          disabled={busy || savingPng}
+          onChange={(e) => { setText(e.target.value); resetResult(); }}
+          aria-label="New text"
           placeholder="New text"
           className="h-12 min-w-0 flex-1 rounded-xl border border-input bg-background px-3 text-base outline-none focus:border-foreground"
         />
-        <button
+        )}
+        <Button
           onClick={() => run()}
-          disabled={!file || !text.trim() || busy}
-          className="h-12 rounded-xl bg-primary px-5 font-bold text-primary-foreground disabled:opacity-40"
+          disabled={!file || (mode === "replace" && !text.trim()) || busy || savingPng}
+          className={`h-12 rounded-xl px-5 font-bold disabled:opacity-40 ${mode === "recreate" ? "w-full" : ""}`}
         >
-          {busy ? `${Math.round(progress)}%` : "Create"}
-        </button>
+          {busy ? `${Math.round(progress)}%` : mode === "recreate" ? "Recreate logo" : "Create"}
+        </Button>
       </div>
 
       {busy && (
@@ -160,7 +203,7 @@ function Index() {
             <div className="h-full rounded-full bg-primary transition-[width] duration-300" style={{ width: `${progress}%` }} />
           </div>
           <p className="text-xs text-muted-foreground">
-            {progress < 60 ? "Reading your logo…" : progress < 92 ? "Drawing new text…" : "Preparing files…"} {Math.round(progress)}%
+            {progress < 60 ? "Reading your logo…" : progress < 92 ? (mode === "recreate" ? "Recreating your logo…" : "Drawing new text…") : "Preparing files…"} {Math.round(progress)}%
           </p>
         </div>
       )}
@@ -173,7 +216,7 @@ function Index() {
             onClick={() => {
               if (savingPng) return;
               // Start native sharing synchronously, while this tap is active.
-              const share = savePng(out.pngFile);
+              const share = savePng(background === "white" ? out.whitePngFile : out.pngFile);
               setSavingPng(true);
               setSaveError(null);
               share.catch((e: unknown) => {
@@ -203,13 +246,14 @@ function Index() {
             placeholder="Fix something? e.g. make the R wavier"
             className="h-12 min-w-0 flex-1 rounded-xl border border-input bg-background px-3 text-base outline-none focus:border-foreground"
           />
-          <button
+           <Button
             onClick={() => run(fix.trim())}
-            disabled={!fix.trim()}
+             disabled={!fix.trim() || savingPng}
+             variant="outline"
             className="h-12 rounded-xl border-2 border-foreground px-4 font-bold disabled:opacity-40"
           >
             Fix
-          </button>
+           </Button>
         </div>
       )}
     </main>
