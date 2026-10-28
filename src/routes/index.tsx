@@ -65,6 +65,8 @@ function Index() {
   const [progress, setProgress] = useState(0);
   const [raw, setRaw] = useState<string | null>(null);
   const [fix, setFix] = useState("");
+  const [more, setMore] = useState(false);
+  const [alts, setAlts] = useState<{ name: string; src?: string; err?: string }[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savingPng, setSavingPng] = useState(false);
@@ -76,6 +78,7 @@ function Index() {
     setOut(null);
     setFrame(null);
     setRaw(null);
+    setAlts([]);
     setFinal(false);
     setFix("");
     setError(null);
@@ -106,6 +109,20 @@ function Index() {
       form.append("text", text.trim());
       form.append("mode", mode);
       let last = "";
+      if (more) {
+        const names = [["gemini", "Gemini"], ["grok", "Grok"]] as const;
+        setAlts([{ name: "OpenAI" }, ...names.map(([, n]) => ({ name: n }))]);
+        names.forEach(([id, n]) => {
+          const f = new FormData();
+          form.forEach((v, k) => f.append(k, v));
+          f.append("provider", id);
+          let got = "";
+          streamImage("/api/edit-image", f, (src, fin) => { if (fin) got = src; })
+            .then(() => setAlts((a) => a.map((x) => (x.name === n ? { name: n, src: got } : x))))
+            .catch((e) => setAlts((a) => a.map((x) => (x.name === n ? { name: n, err: e instanceof Error ? e.message : "Failed" } : x))));
+        });
+      } else setAlts([]);
+      form.append("provider", "openai");
       await streamImage("/api/edit-image", form, (src, isFinal) => {
         setFrame(src);
         setProgress((p) => Math.max(p, isFinal ? 92 : 60));
@@ -113,6 +130,22 @@ function Index() {
         if (isFinal) last = src;
       });
       if (last) {
+        if (more) setAlts((a) => a.map((x) => (x.name === "OpenAI" ? { name: "OpenAI", src: last } : x)));
+        await pickVersion(last);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Something went wrong");
+    } finally {
+      clearInterval(timer);
+      setBusy(false);
+    }
+  }
+
+  async function pickVersion(last: string) {
+    {
+      {
+        setFrame(last);
+        setFinal(true);
         setProgress(95);
         setRaw(last);
         setFix("");
@@ -121,11 +154,6 @@ function Index() {
         setOut({ ...o, pngFile: toFile(o.png, `${slug}.png`, "image/png"), whitePngFile: toFile(o.whitePng, `${slug}-white.png`, "image/png"), svgFile: toFile(o.svg, `${slug}.svg`, "image/svg+xml") });
         setProgress(100);
       }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Something went wrong");
-    } finally {
-      clearInterval(timer);
-      setBusy(false);
     }
   }
 
@@ -211,6 +239,34 @@ function Index() {
       </ToggleGroup>
       {mode === "blend" && (
         <p className="text-xs text-muted-foreground">Add a second image (e.g. a music note). Your logo's style gets reshaped to look like it.</p>
+      )}
+      <button
+        type="button"
+        aria-pressed={more}
+        disabled={busy}
+        onClick={() => setMore((m) => !m)}
+        className={`h-10 rounded-xl border text-xs font-bold ${more ? "border-primary bg-primary text-primary-foreground" : "border-border text-muted-foreground"}`}
+      >
+        {more ? "3 versions: OpenAI + Gemini + Grok" : "OpenAI only · tap for 3 versions"}
+      </button>
+      {alts.length > 0 && (
+        <div className="grid grid-cols-3 gap-2">
+          {alts.map((a) => (
+            <button
+              key={a.name}
+              type="button"
+              disabled={!a.src || busy}
+              onClick={() => a.src && pickVersion(a.src)}
+              className={`flex flex-col items-center gap-1 rounded-lg border p-1 text-[10px] ${a.src && raw === a.src ? "border-primary" : "border-border"}`}
+            >
+              <div className="flex aspect-square w-full items-center justify-center overflow-hidden rounded bg-background">
+                {a.src ? <img src={a.src} alt={`${a.name} version`} className="max-h-full max-w-full object-contain" /> : <span className="px-1 text-center text-muted-foreground">{a.err ? "Failed" : "Working…"}</span>}
+              </div>
+              <span className="font-bold">{a.name}</span>
+              {a.err && <span className="line-clamp-2 text-destructive" title={a.err}>{a.err}</span>}
+            </button>
+          ))}
+        </div>
       )}
 
       <div className="flex items-center gap-2">
