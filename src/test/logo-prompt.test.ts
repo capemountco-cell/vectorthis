@@ -39,3 +39,14 @@ describe("Logo recreation requirements", () => {
     expect(prompt).toContain("required wordmark and original style take priority");
   });
 });
+describe("Shape reshaping", () => {
+  it("uses image 1 as style/composition and image 2 as the target shape", () => {
+    const prompt = buildLogoPrompt("", "", "blend");
+    expect(prompt).toContain("Image 1 is the original uploaded logo and the authoritative style and composition reference. Image 2 is the shape reference");
+    expect(prompt).not.toContain("REQUIRED WORDMARK:");
+  });
+  it("corrections put the shape reference third", () => {
+    const prompt = buildLogoPrompt("", "thicker stem", "blend");
+    expect(prompt).toContain("Image 3 is the shape reference");
+  });
+});
