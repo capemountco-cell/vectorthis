@@ -10,3 +10,4 @@
 <!-- LOVABLE:END -->
 
 - Keep logo edit instructions in the shared prompt builder, with reference roles matching upload order, so exact-text and correction fidelity rules can be regression-tested without live AI calls.
+- PNG saves use the prepared image File through a synchronous Web Share call, with explicit unsupported/error states and no link fallback, because mobile browsers may navigate to image URLs instead of downloading them.
