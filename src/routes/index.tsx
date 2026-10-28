@@ -1,3 +1,4 @@
+import { Image as ImageIcon } from "lucide-react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { streamImage } from "@/lib/stream-image";
@@ -181,7 +182,7 @@ function Index() {
           {preview ? (
             <img src={preview} alt="Original logo" className="h-full w-full object-cover" />
           ) : (
-            <span className="text-[10px] font-bold leading-tight text-muted-foreground">+ Upload</span>
+            <ImageIcon className="h-6 w-6 text-muted-foreground" aria-hidden="true" />
           )}
           <input
             type="file"
