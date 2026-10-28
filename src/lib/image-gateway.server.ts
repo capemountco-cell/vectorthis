@@ -110,4 +110,4 @@ export async function editImage(config: ImageConfig, form: FormData, signal?: Ab
     signal: signal ?? null,
   });
 }
-export const imageSettings: Omit<ImageConfig, "apiKey"> = { baseURL: "https://api.openai.com", model: "gpt-image-1", format: "openai" };
+export const imageSettings: Omit<ImageConfig, "apiKey"> = { baseURL: "https://api.openai.com", model: "gpt-image-2", format: "openai" };
