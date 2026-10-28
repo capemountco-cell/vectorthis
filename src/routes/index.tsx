@@ -1,3 +1,4 @@
+import { Switch } from "@/components/ui/switch";
 import { Image as ImageIcon } from "lucide-react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
@@ -86,8 +87,8 @@ function Index() {
     setSaveError(null);
   }
 
-  async function run(correction?: string) {
-    if (!file || (mode === "replace" && !text.trim()) || (mode === "blend" && !shape)) return;
+  async function run(correction?: string, m: LogoMode = mode) {
+    if (!file || (m === "replace" && !text.trim()) || (m === "blend" && !shape)) return;
     setBusy(true);
     setError(null);
     setSaveError(null);
@@ -99,16 +100,16 @@ function Index() {
     const timer = setInterval(() => setProgress((p) => Math.max(p, Math.min(90, 90 * (1 - Math.exp(-(Date.now() - start) / 25000))))), 300);
     try {
       const form = new FormData();
-      const multi = mode === "blend" || (correction && raw);
+      const multi = m === "blend" || (correction && raw);
       const key = multi ? "image[]" : "image";
       if (correction && raw) {
         form.append(key, new File([toFile(raw, "draft.png", "image/png")], "draft.png", { type: "image/png" }));
         form.append("fix", correction);
       }
       form.append(key, await onWhite(file));
-      if (mode === "blend" && shape) form.append(key, await onWhite(shape));
+      if (m === "blend" && shape) form.append(key, await onWhite(shape));
       form.append("text", text.trim());
-      form.append("mode", mode);
+      form.append("mode", m);
       let last = "";
       if (more) {
         const names = [["gemini", "Gemini"], ["grok", "Grok"]] as const;
@@ -151,7 +152,7 @@ function Index() {
         setRaw(last);
         setFix("");
         const o = await toOutputs(last);
-        const slug = mode === "recreate" ? "logo" : text.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "logo";
+        const slug = m === "recreate" ? "logo" : text.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "logo";
         setOut({ ...o, pngFile: toFile(o.png, `${slug}.png`, "image/png"), whitePngFile: toFile(o.whitePng, `${slug}-white.png`, "image/png"), svgFile: toFile(o.svg, `${slug}.svg`, "image/svg+xml") });
         setProgress(100);
       }
@@ -164,12 +165,12 @@ function Index() {
   return (
     <main className="mx-auto flex min-h-screen max-w-md flex-col gap-3 px-4 py-5">
 
-      <div className={`${background === "transparent" ? "checker" : "bg-background"} relative flex aspect-[16/9] items-center justify-center overflow-hidden rounded-xl border border-border`}>
+      <div className={`${background === "transparent" ? "checker" : "bg-background"} relative flex ${shown ? "min-h-40" : "aspect-[16/9]"} items-center justify-center overflow-hidden rounded-xl border border-border`}>
         {shown ? (
           <img
             src={shown}
             alt="New logo"
-            className={`max-h-full max-w-full object-contain p-3 transition-[filter] ${final ? "blur-0" : "blur-xl"}`}
+            className={`block h-auto max-h-[60vh] w-auto max-w-full object-contain px-3 pt-3 pb-[4.5rem] transition-[filter] ${final ? "blur-0" : "blur-xl"}`}
           />
         ) : (
           <span className="text-sm text-muted-foreground">Your new logo appears here</span>
@@ -228,24 +229,21 @@ function Index() {
         if (value === "replace" || value === "recreate" || value === "blend") {
           setMode(value);
           resetResult();
+          if (value === "recreate" && file) void run(undefined, "recreate");
         }
       }} disabled={busy || savingPng} aria-label="Logo mode" className="grid grid-cols-3">
         <ToggleGroupItem value="replace" className="h-10 border border-border text-xs">Change text</ToggleGroupItem>
         <ToggleGroupItem value="recreate" className="h-10 border border-border text-xs">Recreate</ToggleGroupItem>
         <ToggleGroupItem value="blend" className="h-10 border border-border text-xs">New shape</ToggleGroupItem>
       </ToggleGroup>
+      {file && (<>
       {mode === "blend" && (
         <p className="text-xs text-muted-foreground">Add a second image (e.g. a music note). Your logo's style gets reshaped to look like it.</p>
       )}
-      <button
-        type="button"
-        aria-pressed={more}
-        disabled={busy}
-        onClick={() => setMore((m) => !m)}
-        className={`h-10 rounded-xl border text-xs font-bold ${more ? "border-primary bg-primary text-primary-foreground" : "border-border text-muted-foreground"}`}
-      >
-        {more ? "3 versions: OpenAI + Gemini + Grok" : "OpenAI only · tap for 3 versions"}
-      </button>
+      <label className="flex items-center justify-between gap-3 text-xs font-bold">
+        <span>{more ? "3 versions: OpenAI + Gemini + Grok" : "Get 3 versions (OpenAI + Gemini + Grok)"}</span>
+        <Switch checked={more} onCheckedChange={setMore} disabled={busy} aria-label="Get 3 versions" />
+      </label>
       {alts.length > 0 && (
         <div className="grid grid-cols-3 gap-2">
           {alts.map((a) => (
@@ -276,8 +274,8 @@ function Index() {
         </ToggleGroup>
       </div>
 
+      {mode !== "recreate" && (
       <div className="flex gap-2">
-        {mode !== "recreate" && (
         <input
           value={text}
           disabled={busy || savingPng}
@@ -286,15 +284,16 @@ function Index() {
           placeholder={mode === "blend" ? "Direction (optional) e.g. make each half a note" : "New text"}
           className="h-12 min-w-0 flex-1 rounded-xl border border-input bg-background px-3 text-base outline-none focus:border-foreground"
         />
-        )}
         <Button
           onClick={() => run()}
           disabled={!file || (mode === "replace" && !text.trim()) || (mode === "blend" && !shape) || busy || savingPng}
-          className={`h-12 rounded-xl px-5 font-bold disabled:opacity-40 ${mode === "recreate" ? "w-full" : ""}`}
+          className="h-12 rounded-xl px-5 font-bold disabled:opacity-40"
         >
-          {busy ? `${Math.round(progress)}%` : mode === "recreate" ? "Recreate logo" : mode === "blend" ? "Reshape logo" : "Create"}
+          {busy ? `${Math.round(progress)}%` : mode === "blend" ? "Reshape logo" : "Create"}
         </Button>
       </div>
+      )}
+      </>)}
 
       {busy && (
         <div className="flex flex-col gap-1">
