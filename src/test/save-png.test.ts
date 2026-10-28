@@ -6,8 +6,8 @@ const file = new File([new Uint8Array([137, 80, 78, 71])], "logo.png", { type: "
 afterEach(() => vi.restoreAllMocks());
 
 function sharing(share: unknown, canShare: unknown = () => true) {
-  vi.spyOn(navigator, "share", "get").mockReturnValue(share as Navigator["share"]);
-  vi.spyOn(navigator, "canShare", "get").mockReturnValue(canShare as Navigator["canShare"]);
+  Object.defineProperty(navigator, "share", { configurable: true, value: share });
+  Object.defineProperty(navigator, "canShare", { configurable: true, value: canShare });
 }
 
 // jsdom has no Web Share API; getters allow per-test capability checks.

@@ -16,8 +16,9 @@ export function savePng(file: File): Promise<PngSaveResult> {
     return navigator.share(data).then(
       () => "shared" as const,
       (error: unknown) => {
-        if (error instanceof Error && error.name === "AbortError") return "cancelled" as const;
-        if (error instanceof Error && error.name === "NotAllowedError") {
+        const name = typeof error === "object" && error !== null && "name" in error ? error.name : undefined;
+        if (name === "AbortError") return "cancelled" as const;
+        if (name === "NotAllowedError") {
           throw new Error("Your browser blocked image sharing. Open the app directly in Safari or Chrome instead of an embedded preview, then tap Save PNG again. Your logo is still here.");
         }
         throw new Error("The image share sheet could not open. Try Save PNG again or open the app directly in Safari or Chrome. Your logo is still here.");
