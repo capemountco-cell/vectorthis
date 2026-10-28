@@ -48,10 +48,12 @@ function Index() {
   const [final, setFinal] = useState(false);
   const [out, setOut] = useState<{ png: string; svg: string; pngFile: File; svgFile: File } | null>(null);
   const [progress, setProgress] = useState(0);
+  const [raw, setRaw] = useState<string | null>(null);
+  const [fix, setFix] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function run() {
+  async function run(correction?: string) {
     if (!file || !text.trim()) return;
     setBusy(true);
     setError(null);
@@ -63,7 +65,13 @@ function Index() {
     const timer = setInterval(() => setProgress((p) => Math.max(p, Math.min(90, 90 * (1 - Math.exp(-(Date.now() - start) / 25000))))), 300);
     try {
       const form = new FormData();
-      form.append("image", file);
+      if (correction && raw) {
+        form.append("image[]", new File([toFile(raw, "draft.png", "image/png")], "draft.png", { type: "image/png" }));
+        form.append("image[]", file);
+        form.append("fix", correction);
+      } else {
+        form.append("image", file);
+      }
       form.append("text", text.trim());
       let last = "";
       await streamImage("/api/edit-image", form, (src, isFinal) => {
@@ -74,6 +82,8 @@ function Index() {
       });
       if (last) {
         setProgress(95);
+        setRaw(last);
+        setFix("");
         const o = await toOutputs(last);
         const slug = text.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "logo";
         setOut({ ...o, pngFile: toFile(o.png, `${slug}.png`, "image/png"), svgFile: toFile(o.svg, `${slug}.svg`, "image/svg+xml") });
@@ -136,7 +146,7 @@ function Index() {
           className="h-12 min-w-0 flex-1 rounded-xl border border-input bg-background px-3 text-base outline-none focus:border-foreground"
         />
         <button
-          onClick={run}
+          onClick={() => run()}
           disabled={!file || !text.trim() || busy}
           className="h-12 rounded-xl bg-primary px-5 font-bold text-primary-foreground disabled:opacity-40"
         >
@@ -170,6 +180,23 @@ function Index() {
             className="h-12 rounded-xl border-2 border-foreground font-bold"
           >
             Save SVG
+          </button>
+        </div>
+      )}
+      {out && !busy && (
+        <div className="flex gap-2">
+          <input
+            value={fix}
+            onChange={(e) => setFix(e.target.value)}
+            placeholder="Fix something? e.g. make the R wavier"
+            className="h-12 min-w-0 flex-1 rounded-xl border border-input bg-background px-3 text-base outline-none focus:border-foreground"
+          />
+          <button
+            onClick={() => run(fix.trim())}
+            disabled={!fix.trim()}
+            className="h-12 rounded-xl border-2 border-foreground px-4 font-bold disabled:opacity-40"
+          >
+            Fix
           </button>
         </div>
       )}
