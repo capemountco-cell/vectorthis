@@ -152,7 +152,7 @@ function Index() {
         setRaw(last);
         setFix("");
         const o = await toOutputs(last);
-        const slug = m === "recreate" ? "logo" : text.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "logo";
+        const slug = mode === "recreate" ? "logo" : text.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "logo";
         setOut({ ...o, pngFile: toFile(o.png, `${slug}.png`, "image/png"), whitePngFile: toFile(o.whitePng, `${slug}-white.png`, "image/png"), svgFile: toFile(o.svg, `${slug}.svg`, "image/svg+xml") });
         setProgress(100);
       }
