@@ -2,6 +2,8 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { streamImage } from "@/lib/stream-image";
 import { toOutputs } from "@/lib/logo-convert";
+import { savePng } from "@/lib/save-png";
+import { Button } from "@/components/ui/button";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -25,8 +27,8 @@ function toFile(href: string, name: string, type: string) {
 }
 
 // Must be called directly from the tap (no awaits before share) or iPhone opens the image instead.
-function save(file: File) {
-  if (navigator.canShare?.({ files: [file] })) {
+function saveSvg(file: File) {
+  if (typeof navigator.share === "function" && navigator.canShare?.({ files: [file] })) {
     navigator.share({ files: [file] }).catch(() => {});
     return;
   }
@@ -52,11 +54,14 @@ function Index() {
   const [fix, setFix] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [savingPng, setSavingPng] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   async function run(correction?: string) {
     if (!file || !text.trim()) return;
     setBusy(true);
     setError(null);
+    setSaveError(null);
     setOut(null);
     setFrame(null);
     setFinal(false);
@@ -169,20 +174,31 @@ function Index() {
 
       {out && (
         <div className="grid grid-cols-2 gap-2">
-          <button
-            onClick={() => save(out.pngFile)}
-            className="h-12 rounded-xl bg-primary font-bold text-primary-foreground"
+          <Button
+            onClick={() => {
+              if (savingPng) return;
+              // Start native sharing synchronously, while this tap is active.
+              const share = savePng(out.pngFile);
+              setSavingPng(true);
+              setSaveError(null);
+              share.catch((e: unknown) => {
+                setSaveError(e instanceof Error ? e.message : "Image sharing could not open. Your logo is still here.");
+              }).finally(() => setSavingPng(false));
+            }}
+            disabled={savingPng}
+            className="h-12 whitespace-normal rounded-xl px-2 font-bold"
           >
-            Save PNG to Photos
-          </button>
+            {savingPng ? "Opening save options…" : "Save PNG to Photos"}
+          </Button>
           <button
-            onClick={() => save(out.svgFile)}
+            onClick={() => saveSvg(out.svgFile)}
             className="h-12 rounded-xl border-2 border-foreground font-bold"
           >
             Save SVG
           </button>
         </div>
       )}
+      {saveError && <p role="alert" className="text-sm text-destructive">{saveError}</p>}
       {out && !busy && (
         <div className="flex gap-2">
           <input
