@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildLogoPrompt } from "@/lib/logo-prompt";
+import { buildLogoPrompt, SHAPE_BRIEF_INSTRUCTIONS } from "@/lib/logo-prompt";
 
 describe("Logo recreation requirements", () => {
   it("recreates original lettering and artwork without replacement text", () => {
@@ -39,23 +39,15 @@ describe("Logo recreation requirements", () => {
     expect(prompt).toContain("required wordmark and original style take priority");
   });
 });
-describe("Shape reshaping", () => {
-  it("uses image 1 as style/composition and image 2 as the target shape", () => {
-    const prompt = buildLogoPrompt("", "", "blend");
-    expect(prompt).toContain("Image 1 is the original uploaded logo and the authoritative style and composition reference. Image 2 is the shape reference");
-    expect(prompt).not.toContain("REQUIRED WORDMARK:");
-  });
-  it("corrections put the shape reference third", () => {
-    const prompt = buildLogoPrompt("", "thicker stem", "blend");
-    expect(prompt).toContain("Image 3 is the shape reference");
-  });
-});
-
 describe("Shape hybrid", () => {
-  it("forbids returning the reference alone and keeps original composition", () => {
-    const prompt = buildLogoPrompt("make each half a note", "", "blend");
-    expect(prompt).toContain("NEVER return the shape reference by itself");
+  it("editor gets only the original plus a text brief, never the shape image", () => {
+    const prompt = buildLogoPrompt("", "", "blend", "turn each half into a note");
+    expect(prompt).toContain("REDESIGN BRIEF: turn each half into a note");
     expect(prompt).toContain("same number of separate elements");
-    expect(prompt).toContain('USER DIRECTION: "make each half a note"');
+    expect(prompt).not.toContain("Image 2");
+  });
+  it("brief writer must map each original element to the reference features", () => {
+    expect(SHAPE_BRIEF_INSTRUCTIONS).toContain("will see ONLY Image A");
+    expect(SHAPE_BRIEF_INSTRUCTIONS).toContain("element by element");
   });
 });

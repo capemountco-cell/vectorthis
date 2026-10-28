@@ -1,16 +1,18 @@
 // Reference order matches the multipart upload in the logo editor.
 export type LogoMode = "replace" | "recreate" | "blend";
 
-export function buildLogoPrompt(text: string, correction = "", mode: LogoMode = "replace") {
+export const SHAPE_BRIEF_INSTRUCTIONS = [
+  "You are briefing an image editor that will see ONLY Image A (the original logo), never Image B. Write a precise redesign brief (max 180 words) that turns Image A into a hybrid: keep Image A's exact composition (same number of separate elements, arrangement, orientation, mirrored/interlocking relationship, footprint, rounded geometry and stroke weight) and reshape EACH element so it takes on Image B's characteristic features.",
+  "First list Image A's elements and their positions. Then name Image B's defining features (e.g. round note head, straight stem, curved flag). Then say, element by element, which part becomes which feature and where it sits. The result must still look like Image A's layout, not like Image B alone. Output only the brief.",
+].join("\n");
+
+export function buildLogoPrompt(text: string, correction = "", mode: LogoMode = "replace", brief = "") {
   const glyphs = Array.from(text);
-  const shapeImage = correction ? "Image 3" : "Image 2";
   const spelling = mode === "blend" ? [
-    `HYBRID REDESIGN: Start from the original logo (Image ${correction ? 2 : 1}) and keep its full composition: the same number of separate elements, their arrangement, orientation, interlocking/mirrored relationship, spacing and overall footprint. Then reshape those existing elements so they take on the characteristic features of the shape reference (${shapeImage}).`,
-    `NEVER return the shape reference by itself or a copy of it. The shape reference is only a source of features (for example a music note's round head, stem and flag), not the output. If the original has two elements, the result must still have two elements, each adapted to borrow the reference features, together forming one unified mark.`,
-    "Keep the original's design language: its rounded geometry, stroke weight, corner treatment, symmetry and negative-space style. The result must read clearly as both the original logo's composition and the reference shape's identity.",
-    ...(text ? [`USER DIRECTION: ${JSON.stringify(text)}. Follow this when deciding how to merge the two.`] : []),
-    "Do not add text unless the original logo contains text; if it does, keep that text unchanged.",
-    "Remove the entire photo, scene, background and shadows. Convert everything to solid black even if the originals are white or colored.",
+    "HYBRID REDESIGN: Reshape the original logo's existing elements following the brief below. Keep the same number of separate elements, their arrangement, orientation, mirrored/interlocking relationship and overall footprint. Do not reduce it to a single standalone symbol.",
+    `REDESIGN BRIEF: ${brief}`,
+    "Keep the original's design language: rounded geometry, stroke weight, corner treatment, symmetry and negative-space style. Do not add text unless the original contains text.",
+    "Remove the entire photo, scene, background and shadows. Convert everything to solid black even if the original is white or colored.",
   ].join("\n") : mode === "recreate" ? [
     "ORIGINAL CONTENT IS AUTHORITATIVE: Recreate the original uploaded logo without replacing any text. Preserve every original character, case, space, punctuation mark, repeated letter and its position. If there is no text, reproduce only the original artwork; do not invent a wordmark.",
     "Preserve all original logo symbols, silhouettes, proportions and negative spaces. Remove the entire photo, scene, surface, background and any shadows behind the logo. Convert the logo itself to solid black even if the original logo is white or colored. Do not redraw background objects as part of the logo.",
@@ -25,9 +27,9 @@ export function buildLogoPrompt(text: string, correction = "", mode: LogoMode = 
     "Retain the original stroke weight and contrast, slant, baseline, x-height, cap height, proportions, curves, corners, terminals, negative spaces and spacing rhythm. Reuse original glyph shapes when the same character and case appear; construct missing glyphs and different-case glyphs with the same design language. Preserve non-text icons and decorative details and their relationship to the wordmark. Ignore the photo or background behind the original logo.",
   ].join("\n");
   const task = correction
-    ? `REFERENCE ROLES: Image 1 is the generated draft to correct. Image 2 is the original uploaded logo and the authoritative lettering reference.${mode === "blend" ? " Image 3 is the shape reference the mark should resemble." : ""}\nREQUESTED CORRECTION: ${JSON.stringify(correction)}. Apply this as a local edit to the draft, not a new redesign. Preserve already-correct glyphs, layout and decoration; repair the affected letter(s) using Image 2's design language, not malformed shapes from Image 1. If the correction conflicts with the required wordmark or the original lettering style, the required wordmark and original style take priority.`
+    ? `REFERENCE ROLES: Image 1 is the generated draft to correct. Image 2 is the original uploaded logo and the authoritative lettering reference.\nREQUESTED CORRECTION: ${JSON.stringify(correction)}. Apply this as a local edit to the draft, not a new redesign. Preserve already-correct glyphs, layout and decoration; repair the affected letter(s) using Image 2's design language, not malformed shapes from Image 1. If the correction conflicts with the required wordmark or the original lettering style, the required wordmark and original style take priority.`
     : mode === "blend"
-      ? "REFERENCE ROLES: Image 1 is the original uploaded logo and the authoritative style and composition reference. Image 2 is the shape reference the new mark should resemble."
+      ? "REFERENCE ROLES: Image 1 is the original uploaded logo and the authoritative style and composition reference. Transform it according to the redesign brief."
       : mode === "recreate"
         ? "REFERENCE ROLES: Image 1 is the original uploaded logo and the authoritative reference for all lettering and artwork. Faithfully recreate that same logo, removing only the background and converting the logo to black. Do not redesign or reinterpret it."
         : "REFERENCE ROLES: Image 1 is the original uploaded logo and the authoritative lettering reference. Recreate its logo with only the wordmark text replaced. Do not redesign or reinterpret the brand.";
@@ -37,7 +39,7 @@ export function buildLogoPrompt(text: string, correction = "", mode: LogoMode = 
     style,
     "OUTPUT: A flat solid pure black (#000000) logo on a plain pure white background, fully visible and centered with margin. No gradients, shadows, textures, mockups or extra elements.",
     mode === "blend"
-      ? "FINAL CHECK BEFORE RETURNING: Count the separate elements and compare the layout against the original logo — they must match. If the result looks like the shape reference alone, redo it as a hybrid of the original composition with the reference features. Remove any background. Return only the image."
+      ? "FINAL CHECK BEFORE RETURNING: Count the separate elements and compare the layout against the original logo — they must match, with each element reshaped as the brief describes. Remove any background. Return only the image."
       : mode === "recreate"
         ? "FINAL CHECK BEFORE RETURNING: Compare all lettering and artwork directly against the original uploaded logo, never the draft. Restore every original glyph and detail, repair any style drift, and ensure no background remains. Corrections must not change the original wording or lettering style. Return only the image."
         : `FINAL CHECK BEFORE RETURNING: Read the rendered wordmark left to right and compare every character, case and space against ${JSON.stringify(text)} and the numbered inventory. Repair any extra, missing, repeated or swapped characters. Then compare lettering to the original reference and restore any style drift. Return only the image.`,
