@@ -163,10 +163,6 @@ function Index() {
 
   return (
     <main className="mx-auto flex min-h-screen max-w-md flex-col gap-3 px-4 py-5">
-      <header className="flex items-baseline justify-between">
-        <h1 className="text-2xl font-black tracking-tight">Relogo</h1>
-        <p className="text-xs text-muted-foreground">Your logo, recreated.</p>
-      </header>
 
       <div className={`${background === "transparent" ? "checker" : "bg-background"} relative flex aspect-[16/9] items-center justify-center overflow-hidden rounded-xl border border-border`}>
         {shown ? (
