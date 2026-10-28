@@ -14,6 +14,7 @@ function sharing(share: unknown, canShare: unknown = () => true) {
 // jsdom has no Web Share API; getters allow per-test capability checks.
 Object.defineProperty(navigator, "share", { configurable: true, get: () => undefined });
 Object.defineProperty(navigator, "canShare", { configurable: true, get: () => undefined });
+Object.defineProperty(navigator, "maxTouchPoints", { configurable: true, get: () => 0 });
 
 describe("PNG saving", () => {
   it("downloads the prepared PNG on desktop even when native sharing is available", async () => {
@@ -23,7 +24,7 @@ describe("PNG saving", () => {
     Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:desktop-png") });
     Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
     let downloaded: HTMLAnchorElement | undefined;
-    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function () { downloaded = this; });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) { downloaded = this; });
     const open = vi.spyOn(window, "open");
     await expect(savePng(file)).resolves.toBe("downloaded");
     expect(downloaded?.download).toBe("logo.png");
