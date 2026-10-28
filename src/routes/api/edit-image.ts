@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { editImage, imageSettings } from "@/lib/image-gateway.server";
+import { buildLogoPrompt } from "@/lib/logo-prompt";
 
 export const Route = createFileRoute("/api/edit-image")({
   server: {
@@ -13,16 +14,13 @@ export const Route = createFileRoute("/api/edit-image")({
         form.delete("text");
         const fix = String(form.get("fix") ?? "").trim();
         form.delete("fix");
-        const letters = [...text].map((c) => (c === " " ? "[space]" : c)).join(" ");
-        const spelling = `The text must read exactly "${text}" — ${[...text].length} characters, in this order: ${letters}. Match the original's letter case. No extra, missing, repeated or swapped letters.`;
-        const style = `Preserve the original lettering style precisely: same typeface/custom letterforms, stroke weight, x-height, letter widths, corner shapes, terminals, kerning and any icons or decorative details. Where the new text reuses letters from the original, copy those exact glyphs; draw any new letters so they look like they were designed by the same hand.`;
-        const output = `Output a flat solid pure black (#000000) logo on a plain pure white background, centered with margin. No gradients, shadows, textures, mockups or extra elements.`;
-        form.set(
-          "prompt",
-          fix
-            ? `The first image is a logo draft; the second is the original logo it is based on. Edit the draft to apply this correction: "${fix}". Change nothing else. ${spelling} ${style} ${output}`
-            : `Find the logo/wordmark in this image (it may be light-colored on a photo or textured background — ignore the background entirely) and recreate only that logo as a clean vector-style mark with new wording. ${spelling} ${style} ${output}`,
+        const images = [...form.entries()].filter(([name, value]) =>
+          (name === "image" || name === "image[]") && value instanceof File,
         );
+        if (images.length !== (fix ? 2 : 1)) {
+          return new Response(fix ? "A draft and original logo are required for corrections" : "An original logo is required", { status: 400 });
+        }
+        form.set("prompt", buildLogoPrompt(text, fix));
         form.set("quality", "high");
         const upstream = await editImage({ ...imageSettings, apiKey }, form);
         return new Response(upstream.body, {
