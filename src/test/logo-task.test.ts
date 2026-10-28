@@ -41,7 +41,7 @@ describe("Independent logo tasks", () => {
       prepare: async (src) => src,
     };
     const results = await Promise.allSettled(["bad", "good"].map((name) => executeLogoTask(file(name), options, new AbortController().signal, () => {}, dependencies)));
-    expect(results[0].status).toBe("rejected");
+    expect(results[0]?.status).toBe("rejected");
     expect(results[1]).toEqual({ status: "fulfilled", value: "good output" });
   });
 
@@ -58,7 +58,7 @@ describe("Independent logo tasks", () => {
       prepare,
     };
     const results = await Promise.allSettled([executeLogoTask(file("cancel"), options, abort.signal, () => {}, dependencies), executeLogoTask(file("continue"), options, new AbortController().signal, () => {}, dependencies)]);
-    expect(results[0].status).toBe("rejected");
+    expect(results[0]?.status).toBe("rejected");
     expect(results[1]).toEqual({ status: "fulfilled", value: "continue" });
     expect(prepare).toHaveBeenCalledTimes(1);
   });

@@ -243,7 +243,7 @@ function Index() {
         <ToggleGroupItem value="blend" className="h-10 border border-border text-xs">New shape</ToggleGroupItem>
       </ToggleGroup>
       <label className="flex items-center justify-between gap-3 text-xs font-bold"><span>Batch upload</span><Switch checked={batch} onCheckedChange={setBatch} disabled={busy || savingPng} aria-label="Batch upload" /></label>
-      {batch && <BatchLogos mode={mode} />}
+      <div className={batch ? "flex flex-col gap-3" : "hidden"}><BatchLogos mode={mode} /></div>
       {!batch && file && (<>
       {mode === "blend" && (
         <p className="text-xs text-muted-foreground">Add a second image (e.g. a music note). Your logo's style gets reshaped to look like it.</p>
