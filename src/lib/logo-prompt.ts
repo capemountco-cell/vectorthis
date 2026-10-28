@@ -3,7 +3,8 @@ export type LogoMode = "replace" | "recreate" | "blend";
 
 export const SHAPE_BRIEF_INSTRUCTIONS = [
   "You are briefing an image editor that will see ONLY Image A (the original logo), never Image B. Write a precise redesign brief (max 180 words) that turns Image A into a hybrid: keep Image A's exact composition (same number of separate elements, arrangement, orientation, mirrored/interlocking relationship, footprint, rounded geometry and stroke weight) and reshape EACH element so it takes on Image B's characteristic features.",
-  "First list Image A's elements and their positions. Then name Image B's defining features (e.g. round note head, straight stem, curved flag). Then say, element by element, which part becomes which feature and where it sits. The result must still look like Image A's layout, not like Image B alone. Output only the brief.",
+  "First list Image A's elements and their positions. Then name Image B's defining features (e.g. round note head, straight stem, curved flag). Then say, element by element, which part becomes which feature and where it sits. The result must still look like Image A's layout, not like Image B alone.",
+  "Minimal change: keep each element's bold solid mass, thickness and footprint — do not thin elements into skinny lines. Map Image A's existing parts onto Image B's parts (e.g. a round bulb end becomes the head; a tapered body becomes a thick stem whose end flares into the flag). The pieces should stay compact and nest together with the same narrow, consistent gap between them as in Image A, reading as one tight unified mark. Output only the brief.",
 ].join("\n");
 
 export function buildLogoPrompt(text: string, correction = "", mode: LogoMode = "replace", brief = "") {
@@ -11,7 +12,7 @@ export function buildLogoPrompt(text: string, correction = "", mode: LogoMode = 
   const spelling = mode === "blend" ? [
     "HYBRID REDESIGN: Reshape the original logo's existing elements following the brief below. Keep the same number of separate elements, their arrangement, orientation, mirrored/interlocking relationship and overall footprint. Do not reduce it to a single standalone symbol.",
     `REDESIGN BRIEF: ${brief}`,
-    "Keep the original's design language: rounded geometry, stroke weight, corner treatment, symmetry and negative-space style. Do not add text unless the original contains text.",
+    "Keep the original's design language: bold solid mass, rounded geometry, stroke weight, corner treatment, symmetry and the same narrow gap between elements. Do not thin elements into skinny lines. Do not add text unless the original contains text.",
     "Remove the entire photo, scene, background and shadows. Convert everything to solid black even if the original is white or colored.",
   ].join("\n") : mode === "recreate" ? [
     "ORIGINAL CONTENT IS AUTHORITATIVE: Recreate the original uploaded logo without replacing any text. Preserve every original character, case, space, punctuation mark, repeated letter and its position. If there is no text, reproduce only the original artwork; do not invent a wordmark.",
