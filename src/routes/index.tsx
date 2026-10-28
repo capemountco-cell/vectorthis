@@ -226,6 +226,7 @@ function Index() {
       </div>
 
       <ToggleGroup type="single" value={mode} onValueChange={(value) => {
+        if (!value && mode === "recreate" && file) { void run(undefined, "recreate"); return; }
         if (value === "replace" || value === "recreate" || value === "blend") {
           setMode(value);
           resetResult();
