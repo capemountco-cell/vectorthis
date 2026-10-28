@@ -91,8 +91,8 @@ function Index() {
     setSaveError(null);
   }
 
-  async function run(correction?: string, m: LogoMode = mode) {
-    if (!file || (m === "replace" && !text.trim()) || (m === "blend" && !shape)) return;
+  async function run(correction?: string, m: LogoMode = mode, source: File | null = file) {
+    if (!source || (m === "replace" && !text.trim()) || (m === "blend" && !shape)) return;
     setBusy(true);
     setError(null);
     setSaveError(null);
@@ -110,7 +110,7 @@ function Index() {
         form.append(key, new File([toFile(raw, "draft.png", "image/png")], "draft.png", { type: "image/png" }));
         form.append("fix", correction);
       }
-      form.append(key, await onWhite(file));
+      form.append(key, await onWhite(source));
       if (m === "blend" && shape) form.append(key, await onWhite(shape));
       form.append("text", text.trim());
       form.append("mode", m);
@@ -198,7 +198,7 @@ function Index() {
                 if (preview) URL.revokeObjectURL(preview);
                 setFile(f);
                 setPreview(URL.createObjectURL(f));
-                 if (mode === "recreate") void runUploaded(f);
+                 if (mode === "recreate") void run(undefined, "recreate", f);
               }
             }}
           />
