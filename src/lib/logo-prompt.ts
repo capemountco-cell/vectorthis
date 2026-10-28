@@ -15,9 +15,10 @@ export const SHAPE_BRIEF_INSTRUCTIONS = [
 export function buildLogoPrompt(text: string, correction = "", mode: LogoMode = "replace", brief = "") {
   const glyphs = Array.from(text);
   const spelling = mode === "blend" ? [
-    "HYBRID REDESIGN: Reshape the original logo's existing elements following the brief below. Keep the same number of separate elements, their arrangement, orientation, mirrored/interlocking relationship and overall footprint. Do not reduce it to a single standalone symbol.",
+    "HYBRID REDESIGN: Reshape the original logo's existing elements following the brief below. Keep the same number of separate elements, their arrangement, orientation and mirrored/interlocking relationship. Do not reduce it to a single standalone symbol.",
     `REDESIGN BRIEF: ${brief}`,
-    "Keep the original's design language: bold solid mass, rounded geometry, stroke weight, corner treatment, symmetry and the same narrow gap between elements. Do not thin elements into skinny lines. Do not add text unless the original contains text.",
+    TIGHT_NESTING,
+    "Keep the original's design language: bold solid mass, rounded geometry, stroke weight, corner treatment and symmetry. Do not thin elements into skinny lines. Do not add text unless the original contains text.",
     "Remove the entire photo, scene, background and shadows. Convert everything to solid black even if the original is white or colored.",
   ].join("\n") : mode === "recreate" ? [
     "ORIGINAL CONTENT IS AUTHORITATIVE: Recreate the original uploaded logo without replacing any text. Preserve every original character, case, space, punctuation mark, repeated letter and its position. If there is no text, reproduce only the original artwork; do not invent a wordmark.",
@@ -45,7 +46,7 @@ export function buildLogoPrompt(text: string, correction = "", mode: LogoMode = 
     style,
     "OUTPUT: A flat solid pure black (#000000) logo on a plain pure white background, fully visible and centered with margin. No gradients, shadows, textures, mockups or extra elements.",
     mode === "blend"
-      ? "FINAL CHECK BEFORE RETURNING: Count the separate elements and compare the layout against the original logo — they must match, with each element reshaped as the brief describes. Remove any background. Return only the image."
+      ? "FINAL CHECK BEFORE RETURNING: Count the separate elements and compare the layout against the original logo — they must match, with each element reshaped as the brief describes. Check the gap: if the elements sit apart or leave open space between them, move them closer until only one narrow, even channel separates them, without touching. Remove any background. Return only the image."
       : mode === "recreate"
         ? "FINAL CHECK BEFORE RETURNING: Compare all lettering and artwork directly against the original uploaded logo, never the draft. Restore every original glyph and detail, repair any style drift, and ensure no background remains. Corrections must not change the original wording or lettering style. Return only the image."
         : `FINAL CHECK BEFORE RETURNING: Read the rendered wordmark left to right and compare every character, case and space against ${JSON.stringify(text)} and the numbered inventory. Repair any extra, missing, repeated or swapped characters. Then compare lettering to the original reference and restore any style drift. Return only the image.`,
