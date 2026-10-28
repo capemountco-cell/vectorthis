@@ -8,6 +8,8 @@ import { downloadFile, isMobileSaveDevice, savePng } from "@/lib/save-png";
 import { Button } from "@/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import type { LogoMode } from "@/lib/logo-prompt";
+import { DEFAULT_LOGO_MODE } from "@/lib/logo-task";
+import { BatchLogos } from "@/components/batch-logos";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -45,7 +47,8 @@ async function onWhite(f: File): Promise<File> {
   const c = document.createElement("canvas");
   c.width = bmp.width;
   c.height = bmp.height;
-  const ctx = c.getContext("2d")!;
+  const ctx = c.getContext("2d");
+  if (!ctx) throw new Error("Could not read your logo.");
   ctx.fillStyle = "#fff";
   ctx.fillRect(0, 0, c.width, c.height);
   ctx.drawImage(bmp, 0, 0);
@@ -59,7 +62,8 @@ function Index() {
   const [shape, setShape] = useState<File | null>(null);
   const [shapePreview, setShapePreview] = useState<string | null>(null);
   const [text, setText] = useState("");
-  const [mode, setMode] = useState<LogoMode>("replace");
+  const [mode, setMode] = useState<LogoMode>(DEFAULT_LOGO_MODE);
+  const [batch, setBatch] = useState(false);
   const [background, setBackground] = useState("transparent");
   const [frame, setFrame] = useState<string | null>(null);
   const [final, setFinal] = useState(false);
@@ -87,8 +91,8 @@ function Index() {
     setSaveError(null);
   }
 
-  async function run(correction?: string, m: LogoMode = mode) {
-    if (!file || (m === "replace" && !text.trim()) || (m === "blend" && !shape)) return;
+  async function run(correction?: string, m: LogoMode = mode, source: File | null = file) {
+    if (!source || (m === "replace" && !text.trim()) || (m === "blend" && !shape)) return;
     setBusy(true);
     setError(null);
     setSaveError(null);
@@ -106,7 +110,7 @@ function Index() {
         form.append(key, new File([toFile(raw, "draft.png", "image/png")], "draft.png", { type: "image/png" }));
         form.append("fix", correction);
       }
-      form.append(key, await onWhite(file));
+      form.append(key, await onWhite(source));
       if (m === "blend" && shape) form.append(key, await onWhite(shape));
       form.append("text", text.trim());
       form.append("mode", m);
@@ -163,9 +167,9 @@ function Index() {
   const shown = (background === "white" ? out?.whitePng : out?.png) ?? frame;
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-md flex-col gap-3 px-4 py-5">
+    <main className={`mx-auto flex min-h-screen ${batch ? "max-w-5xl" : "max-w-md"} flex-col gap-3 px-4 py-5`}>
 
-      <div className={`${background === "transparent" ? "checker" : "bg-background"} relative flex ${shown ? "min-h-40" : "aspect-[16/9]"} items-center justify-center overflow-hidden rounded-xl border border-border`}>
+      {!batch && <div className={`${background === "transparent" ? "checker" : "bg-background"} relative flex ${shown ? "min-h-40" : "aspect-[16/9]"} items-center justify-center overflow-hidden rounded-xl border border-border`}>
         {shown ? (
           <img
             src={shown}
@@ -194,6 +198,7 @@ function Index() {
                 if (preview) URL.revokeObjectURL(preview);
                 setFile(f);
                 setPreview(URL.createObjectURL(f));
+                 if (mode === "recreate") void run(undefined, "recreate", f);
               }
             }}
           />
@@ -223,21 +228,23 @@ function Index() {
             />
           </label>
         )}
-      </div>
+      </div>}
 
       <ToggleGroup type="single" value={mode} onValueChange={(value) => {
-        if (!value && mode === "recreate" && file) { void run(undefined, "recreate"); return; }
+        if (!batch && !value && mode === "recreate" && file) { void run(undefined, "recreate"); return; }
         if (value === "replace" || value === "recreate" || value === "blend") {
           setMode(value);
           resetResult();
-          if (value === "recreate" && file) void run(undefined, "recreate");
+          if (!batch && value === "recreate" && file) void run(undefined, "recreate");
         }
       }} disabled={busy || savingPng} aria-label="Logo mode" className="grid grid-cols-3">
         <ToggleGroupItem value="replace" className="h-10 border border-border text-xs">Change text</ToggleGroupItem>
         <ToggleGroupItem value="recreate" className="h-10 border border-border text-xs">Recreate</ToggleGroupItem>
         <ToggleGroupItem value="blend" className="h-10 border border-border text-xs">New shape</ToggleGroupItem>
       </ToggleGroup>
-      {file && (<>
+      <label className="flex items-center justify-between gap-3 text-xs font-bold"><span>Batch upload</span><Switch checked={batch} onCheckedChange={setBatch} disabled={busy || savingPng} aria-label="Batch upload" /></label>
+      <div className={batch ? "flex flex-col gap-3" : "hidden"}><BatchLogos mode={mode} /></div>
+      {!batch && file && (<>
       {mode === "blend" && (
         <p className="text-xs text-muted-foreground">Add a second image (e.g. a music note). Your logo's style gets reshaped to look like it.</p>
       )}
@@ -296,7 +303,7 @@ function Index() {
       )}
       </>)}
 
-      {busy && (
+      {!batch && busy && (
         <div className="flex flex-col gap-1">
           <div className="h-2 overflow-hidden rounded-full bg-muted">
             <div className="h-full rounded-full bg-primary transition-[width] duration-300" style={{ width: `${progress}%` }} />
@@ -307,9 +314,9 @@ function Index() {
         </div>
       )}
 
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {!batch && error && <p className="text-sm text-destructive">{error}</p>}
 
-      {out && (
+      {!batch && out && (
         <div className="grid grid-cols-2 gap-2">
           <Button
             onClick={() => {
@@ -336,8 +343,8 @@ function Index() {
           </Button>
         </div>
       )}
-      {saveError && <p role="alert" className="text-sm text-destructive">{saveError}</p>}
-      {out && !busy && (
+      {!batch && saveError && <p role="alert" className="text-sm text-destructive">{saveError}</p>}
+      {!batch && out && !busy && (
         <div className="flex gap-2">
           <input
             value={fix}
