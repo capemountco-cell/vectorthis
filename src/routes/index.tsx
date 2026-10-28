@@ -158,17 +158,46 @@ function Index() {
             }}
           />
         </label>
+        {mode === "blend" && (
+          <label className="absolute bottom-2 left-[4.5rem] flex h-14 w-14 cursor-pointer items-center justify-center overflow-hidden rounded-lg border-2 border-background bg-muted shadow">
+            {shapePreview ? (
+              <img src={shapePreview} alt="Shape reference" className="h-full w-full object-cover" />
+            ) : (
+              <span className="text-center text-[10px] font-bold leading-tight text-muted-foreground">+ Shape</span>
+            )}
+            <input
+              type="file"
+              accept="image/*"
+              aria-label="Upload shape reference"
+              disabled={busy || savingPng}
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) {
+                  resetResult();
+                  if (shapePreview) URL.revokeObjectURL(shapePreview);
+                  setShape(f);
+                  setShapePreview(URL.createObjectURL(f));
+                }
+              }}
+            />
+          </label>
+        )}
       </div>
 
       <ToggleGroup type="single" value={mode} onValueChange={(value) => {
-        if (value === "replace" || value === "recreate") {
+        if (value === "replace" || value === "recreate" || value === "blend") {
           setMode(value);
           resetResult();
         }
-      }} disabled={busy || savingPng} aria-label="Logo mode" className="grid grid-cols-2">
-        <ToggleGroupItem value="replace" className="h-10 border border-border">Change text</ToggleGroupItem>
-        <ToggleGroupItem value="recreate" className="h-10 border border-border">Recreate original</ToggleGroupItem>
+      }} disabled={busy || savingPng} aria-label="Logo mode" className="grid grid-cols-3">
+        <ToggleGroupItem value="replace" className="h-10 border border-border text-xs">Change text</ToggleGroupItem>
+        <ToggleGroupItem value="recreate" className="h-10 border border-border text-xs">Recreate</ToggleGroupItem>
+        <ToggleGroupItem value="blend" className="h-10 border border-border text-xs">New shape</ToggleGroupItem>
       </ToggleGroup>
+      {mode === "blend" && (
+        <p className="text-xs text-muted-foreground">Add a second image (e.g. a music note). Your logo's style gets reshaped to look like it.</p>
+      )}
 
       <div className="flex items-center gap-2">
         <span className="text-xs text-muted-foreground">PNG background</span>
@@ -193,10 +222,10 @@ function Index() {
         )}
         <Button
           onClick={() => run()}
-          disabled={!file || (mode === "replace" && !text.trim()) || busy || savingPng}
-          className={`h-12 rounded-xl px-5 font-bold disabled:opacity-40 ${mode === "recreate" ? "w-full" : ""}`}
+          disabled={!file || (mode === "replace" && !text.trim()) || (mode === "blend" && !shape) || busy || savingPng}
+          className={`h-12 rounded-xl px-5 font-bold disabled:opacity-40 ${mode !== "replace" ? "w-full" : ""}`}
         >
-          {busy ? `${Math.round(progress)}%` : mode === "recreate" ? "Recreate logo" : "Create"}
+          {busy ? `${Math.round(progress)}%` : mode === "recreate" ? "Recreate logo" : mode === "blend" ? "Reshape logo" : "Create"}
         </Button>
       </div>
 
