@@ -37,6 +37,20 @@ function saveSvg(file: File) {
   downloadFile(file);
 }
 
+// Transparent uploads read as solid black to the AI, so place them on white first.
+async function onWhite(f: File): Promise<File> {
+  const bmp = await createImageBitmap(f);
+  const c = document.createElement("canvas");
+  c.width = bmp.width;
+  c.height = bmp.height;
+  const ctx = c.getContext("2d")!;
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, c.width, c.height);
+  ctx.drawImage(bmp, 0, 0);
+  const blob = await new Promise<Blob | null>((r) => c.toBlob(r, "image/png"));
+  return blob ? new File([blob], "upload.png", { type: "image/png" }) : f;
+}
+
 function Index() {
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
@@ -87,8 +101,8 @@ function Index() {
         form.append(key, new File([toFile(raw, "draft.png", "image/png")], "draft.png", { type: "image/png" }));
         form.append("fix", correction);
       }
-      form.append(key, file);
-      if (mode === "blend" && shape) form.append(key, shape);
+      form.append(key, await onWhite(file));
+      if (mode === "blend" && shape) form.append(key, await onWhite(shape));
       form.append("text", text.trim());
       form.append("mode", mode);
       let last = "";
