@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildLogoPrompt, SHAPE_BRIEF_INSTRUCTIONS } from "@/lib/logo-prompt";
+import { buildLogoPrompt, SHAPE_BRIEF_INSTRUCTIONS, TIGHT_NESTING } from "@/lib/logo-prompt";
 
 describe("Logo recreation requirements", () => {
   it("recreates original lettering and artwork without replacement text", () => {
@@ -49,5 +49,15 @@ describe("Shape hybrid", () => {
   it("brief writer must map each original element to the reference features", () => {
     expect(SHAPE_BRIEF_INSTRUCTIONS).toContain("will see ONLY Image A");
     expect(SHAPE_BRIEF_INSTRUCTIONS).toContain("element by element");
+  });
+  it("both AI steps require the mirrored elements to nest with one narrow gap", () => {
+    const prompt = buildLogoPrompt("", "", "blend", "brief");
+    for (const text of [prompt, SHAPE_BRIEF_INSTRUCTIONS]) {
+      expect(text).toContain(TIGHT_NESTING);
+    }
+    expect(TIGHT_NESTING).toContain("mirrored composition");
+    expect(TIGHT_NESTING).toContain("never wider than the narrowest gap in the original");
+    expect(TIGHT_NESTING).toContain("must never touch or merge");
+    expect(prompt).toContain("move them closer until only one narrow, even channel separates them");
   });
 });
