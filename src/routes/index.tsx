@@ -210,20 +210,20 @@ function Index() {
       </div>
 
       <div className="flex gap-2">
-        {mode === "replace" && (
+        {mode !== "recreate" && (
         <input
           value={text}
           disabled={busy || savingPng}
           onChange={(e) => { setText(e.target.value); resetResult(); }}
           aria-label="New text"
-          placeholder="New text"
+          placeholder={mode === "blend" ? "Direction (optional) e.g. make each half a note" : "New text"}
           className="h-12 min-w-0 flex-1 rounded-xl border border-input bg-background px-3 text-base outline-none focus:border-foreground"
         />
         )}
         <Button
           onClick={() => run()}
           disabled={!file || (mode === "replace" && !text.trim()) || (mode === "blend" && !shape) || busy || savingPng}
-          className={`h-12 rounded-xl px-5 font-bold disabled:opacity-40 ${mode !== "replace" ? "w-full" : ""}`}
+          className={`h-12 rounded-xl px-5 font-bold disabled:opacity-40 ${mode === "recreate" ? "w-full" : ""}`}
         >
           {busy ? `${Math.round(progress)}%` : mode === "recreate" ? "Recreate logo" : mode === "blend" ? "Reshape logo" : "Create"}
         </Button>

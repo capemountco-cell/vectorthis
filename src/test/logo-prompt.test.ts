@@ -50,3 +50,12 @@ describe("Shape reshaping", () => {
     expect(prompt).toContain("Image 3 is the shape reference");
   });
 });
+
+describe("Shape hybrid", () => {
+  it("forbids returning the reference alone and keeps original composition", () => {
+    const prompt = buildLogoPrompt("make each half a note", "", "blend");
+    expect(prompt).toContain("NEVER return the shape reference by itself");
+    expect(prompt).toContain("same number of separate elements");
+    expect(prompt).toContain('USER DIRECTION: "make each half a note"');
+  });
+});
