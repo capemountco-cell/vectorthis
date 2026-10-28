@@ -1,3 +1,4 @@
-- [ ] Add recreate-only mode with original lettering preserved, including corrections.
-- [ ] Add transparent/white PNG selection while preserving mobile and desktop saving.
-- [ ] Verify recreation, background pixels, correction references, and exports.
+- [x] Add recreate-only mode with original lettering preserved, including corrections.
+- [x] Add transparent/white PNG selection while preserving mobile and desktop saving.
+- [x] Verify mode submission, background pixels, correction-reference rules, and downloads with a controlled image; inspect desktop and mobile layouts.
+- [ ] Verify live AI recreation: blocked by the image service rejecting the sample request (moderation_blocked); no automatic retry.
