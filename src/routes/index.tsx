@@ -131,7 +131,7 @@ function Index() {
       });
       if (last) {
         if (more) setAlts((a) => a.map((x) => (x.name === "OpenAI" ? { name: "OpenAI", src: last } : x)));
-        await useVersion(last);
+        await pickVersion(last);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong");
@@ -141,7 +141,7 @@ function Index() {
     }
   }
 
-  async function useVersion(last: string) {
+  async function pickVersion(last: string) {
     {
       {
         setFrame(last);
@@ -239,6 +239,34 @@ function Index() {
       </ToggleGroup>
       {mode === "blend" && (
         <p className="text-xs text-muted-foreground">Add a second image (e.g. a music note). Your logo's style gets reshaped to look like it.</p>
+      )}
+      <button
+        type="button"
+        aria-pressed={more}
+        disabled={busy}
+        onClick={() => setMore((m) => !m)}
+        className={`h-10 rounded-xl border text-xs font-bold ${more ? "border-primary bg-primary text-primary-foreground" : "border-border text-muted-foreground"}`}
+      >
+        {more ? "3 versions: OpenAI + Gemini + Grok" : "OpenAI only · tap for 3 versions"}
+      </button>
+      {alts.length > 0 && (
+        <div className="grid grid-cols-3 gap-2">
+          {alts.map((a) => (
+            <button
+              key={a.name}
+              type="button"
+              disabled={!a.src || busy}
+              onClick={() => a.src && pickVersion(a.src)}
+              className={`flex flex-col items-center gap-1 rounded-lg border p-1 text-[10px] ${a.src && raw === a.src ? "border-primary" : "border-border"}`}
+            >
+              <div className="flex aspect-square w-full items-center justify-center overflow-hidden rounded bg-background">
+                {a.src ? <img src={a.src} alt={`${a.name} version`} className="max-h-full max-w-full object-contain" /> : <span className="px-1 text-center text-muted-foreground">{a.err ? "Failed" : "Working…"}</span>}
+              </div>
+              <span className="font-bold">{a.name}</span>
+              {a.err && <span className="line-clamp-2 text-destructive" title={a.err}>{a.err}</span>}
+            </button>
+          ))}
+        </div>
       )}
 
       <div className="flex items-center gap-2">
