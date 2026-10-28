@@ -7,6 +7,8 @@ async function loadPixels(src: string) {
   canvas.width = img.naturalWidth;
   canvas.height = img.naturalHeight;
   const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(img, 0, 0);
   return { canvas, ctx, data: ctx.getImageData(0, 0, canvas.width, canvas.height) };
 }
@@ -15,7 +17,7 @@ export async function toOutputs(src: string) {
   const { canvas, ctx, data } = await loadPixels(src);
   const d = data.data;
   for (let i = 0; i < d.length; i += 4) {
-    const lum = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+    const lum = 0.299 * d[i]! + 0.587 * d[i + 1]! + 0.114 * d[i + 2]!;
     // darkness -> alpha, smooth edges
     const a = Math.max(0, Math.min(255, ((235 - lum) / 175) * 255));
     d[i] = d[i + 1] = d[i + 2] = 0;
@@ -27,7 +29,7 @@ export async function toOutputs(src: string) {
   // Binary copy for tracing
   const bin = new ImageData(new Uint8ClampedArray(d), data.width, data.height);
   for (let i = 0; i < bin.data.length; i += 4) {
-    const on = bin.data[i + 3] > 128;
+    const on = bin.data[i + 3]! > 128;
     bin.data[i] = bin.data[i + 1] = bin.data[i + 2] = on ? 0 : 255;
     bin.data[i + 3] = 255;
   }
