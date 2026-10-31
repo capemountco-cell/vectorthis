@@ -2,5 +2,5 @@
 - [x] Add transparent/white PNG selection while preserving mobile and desktop saving.
 - [x] Verify mode submission, background pixels, correction-reference rules, and downloads with a controlled image; inspect desktop and mobile layouts.
 - [x] New shape: tighten the gap so the two mirrored notes nest closely (verified with two live runs).
-- [ ] Default to Recreate and add concurrent batch uploads with independent progress, results, retries, cancellation, and downloads.
-- [ ] Verify batch uploads, task independence, and collage layout.
+- [x] Default to Recreate and add concurrent batch uploads with independent progress, results, retries, cancellation, and downloads.
+- [x] Verify batch uploads, task independence, and collage layout: 22 tests passed; controlled four-task upload/retry/download checks passed; two concurrent live OpenAI recreations finished and downloaded successfully.
