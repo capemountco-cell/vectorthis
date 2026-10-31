@@ -14,3 +14,4 @@
 - Logo requests carry an explicit replacement or recreation mode through the shared prompt builder; prepare both PNG backgrounds from the same cropped pixels before saving so background changes never require inference or delay native sharing.
 - Shape-reshape mode first has a vision model write a text brief from both images, then sends only the original logo to the image editor, so it cannot copy the shape reference; uploads are flattened onto white first because transparency reads as solid black.
 - Batch jobs snapshot their inputs and own their stream, abort controller, progress, and prepared exports; no shared busy flag or task count cap may serialize or overwrite independent results.
+- Upload targets share useImageDrop for drag highlighting, image filtering, disabled-state handling, and file-drop navigation prevention; drops reuse the file-picker callbacks so task behavior stays identical.
