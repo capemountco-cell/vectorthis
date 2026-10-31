@@ -10,6 +10,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import type { LogoMode } from "@/lib/logo-prompt";
 import { DEFAULT_LOGO_MODE } from "@/lib/logo-task";
 import { BatchLogos } from "@/components/batch-logos";
+import { useImageDrop } from "@/hooks/use-image-drop";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -165,11 +166,26 @@ function Index() {
 
 
   const shown = (background === "white" ? out?.whitePng : out?.png) ?? frame;
+  function uploadLogo(f: File) {
+    resetResult();
+    if (preview) URL.revokeObjectURL(preview);
+    setFile(f);
+    setPreview(URL.createObjectURL(f));
+    if (mode === "recreate") void run(undefined, "recreate", f);
+  }
+  function uploadShape(f: File) {
+    resetResult();
+    if (shapePreview) URL.revokeObjectURL(shapePreview);
+    setShape(f);
+    setShapePreview(URL.createObjectURL(f));
+  }
+  const logoDrop = useImageDrop((files) => { const f = files[0]; if (f) uploadLogo(f); }, busy || savingPng || batch);
+  const shapeDrop = useImageDrop((files) => { const f = files[0]; if (f) uploadShape(f); }, busy || savingPng || batch);
 
   return (
     <main className={`mx-auto flex min-h-screen ${batch ? "max-w-5xl" : "max-w-md"} flex-col gap-3 px-4 py-5`}>
 
-      {!batch && <div className={`${background === "transparent" ? "checker" : "bg-background"} relative flex ${shown ? "min-h-40" : "aspect-[16/9]"} items-center justify-center overflow-hidden rounded-xl border border-border`}>
+      {!batch && <div {...logoDrop.handlers} aria-label="Logo upload area" className={`${background === "transparent" ? "checker" : "bg-background"} ${logoDrop.dragging ? "ring-2 ring-primary" : ""} relative flex ${shown ? "min-h-40" : "aspect-[16/9]"} items-center justify-center overflow-hidden rounded-xl border border-border`}>
         {shown ? (
           <img
             src={shown}
@@ -193,18 +209,13 @@ function Index() {
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0];
-              if (f) {
-                resetResult();
-                if (preview) URL.revokeObjectURL(preview);
-                setFile(f);
-                setPreview(URL.createObjectURL(f));
-                 if (mode === "recreate") void run(undefined, "recreate", f);
-              }
+              if (f) uploadLogo(f);
+              e.target.value = "";
             }}
           />
         </label>
         {mode === "blend" && (
-          <label className="absolute bottom-2 left-[4.5rem] flex h-14 w-14 cursor-pointer items-center justify-center overflow-hidden rounded-lg border-2 border-background bg-muted shadow">
+          <label {...shapeDrop.handlers} aria-label="Shape upload area" className={`${shapeDrop.dragging ? "ring-2 ring-primary" : ""} absolute bottom-2 left-[4.5rem] flex h-14 w-14 cursor-pointer items-center justify-center overflow-hidden rounded-lg border-2 border-background bg-muted shadow`}>
             {shapePreview ? (
               <img src={shapePreview} alt="Shape reference" className="h-full w-full object-cover" />
             ) : (
@@ -218,12 +229,8 @@ function Index() {
               className="hidden"
               onChange={(e) => {
                 const f = e.target.files?.[0];
-                if (f) {
-                  resetResult();
-                  if (shapePreview) URL.revokeObjectURL(shapePreview);
-                  setShape(f);
-                  setShapePreview(URL.createObjectURL(f));
-                }
+                if (f) uploadShape(f);
+                e.target.value = "";
               }}
             />
           </label>
