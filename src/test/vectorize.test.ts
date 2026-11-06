@@ -181,4 +181,53 @@ describe("vectorize", () => {
     expect(total / source.length).toBeLessThan(0.006);
     expect(worst).toBeLessThan(0.45);
   });
+
+  it("fits rounded corners as true circular arcs with the right radius", () => {
+    // Rounded rectangle, corner radius 12, antialiased.
+    const r = 12,
+      x0 = 10.4,
+      y0 = 9.7,
+      x1 = 110.4,
+      y1 = 79.7;
+    const cov = raster(120, 90, (x, y) => {
+      const cx = Math.min(Math.max(x, x0 + r), x1 - r),
+        cy = Math.min(Math.max(y, y0 + r), y1 - r);
+      return x >= x0 && x <= x1 && y >= y0 && y <= y1 && Math.hypot(x - cx, y - cy) <= r;
+    });
+    const [path] = vectorize(cov, 120, 90);
+    const curves = path!.segments.filter((s) => s.type === "C");
+    expect(curves).toHaveLength(4);
+    expect(path!.segments.filter((s) => s.type === "L")).toHaveLength(4);
+    let from = path!.start;
+    for (const s of path!.segments) {
+      if (s.type === "C") {
+        const radius = Math.max(Math.abs(s.to.x - from.x), Math.abs(s.to.y - from.y));
+        expect(Math.abs(radius - r)).toBeLessThan(0.4);
+        // Circle handles are 0.5523 × radius.
+        expect(Math.hypot(s.c1.x - from.x, s.c1.y - from.y) / radius).toBeCloseTo(0.5523, 2);
+      }
+      from = s.to;
+    }
+  });
+
+  it("gives the Greek-key mark two matching round corners", () => {
+    const { width, height, rgba } = decodePng("src/test/fixtures/greek-key-mark.png");
+    const paths = vectorize(coverageFromRgba(rgba, width, height), width, height);
+    const radii: number[] = [];
+    for (const p of paths) {
+      let from = p.start;
+      for (const s of p.segments) {
+        if (s.type === "C") {
+          const radius = Math.max(Math.abs(s.to.x - from.x), Math.abs(s.to.y - from.y));
+          radii.push(radius);
+          expect(Math.hypot(s.c1.x - from.x, s.c1.y - from.y) / radius).toBeCloseTo(0.5523, 2);
+        }
+        from = s.to;
+      }
+    }
+    expect(radii).toHaveLength(2);
+    expect(Math.abs(radii[0]! - radii[1]!)).toBeLessThan(0.05);
+    expect(radii[0]!).toBeGreaterThan(5.5);
+    expect(radii[0]!).toBeLessThan(7);
+  });
 });

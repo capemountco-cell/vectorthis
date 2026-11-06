@@ -567,7 +567,7 @@ const project = (p: Point, c: Point, d: Point) => add(c, mul(d, dot(sub(p, c), d
  * Finds genuinely straight stretches inside a run: long enough, within tolerance,
  * and without the systematic bow an arc has (so big curves stay curves).
  */
-function findLineSpans(points: Point[], tol: number, minLen: number) {
+function findLineSpans(points: Point[], tol: number, minLen: number, minInterior = minLen) {
   const n = points.length;
   const reach = new Int32Array(n);
   for (let i = 0; i < n; i++) {
@@ -600,7 +600,9 @@ function findLineSpans(points: Point[], tol: number, minLen: number) {
     while (i < j && taken[i]) i++;
     while (j > i && taken[j]) j--;
     // Allow touching at a shared endpoint only.
-    if (j <= i || len(sub(points[j]!, points[i]!)) < minLen) continue;
+    // Lines leaving a corner may be short; a "line" in the middle of a curve must be long.
+    const need = i === 0 || j === points.length - 1 ? minLen : minInterior;
+    if (j <= i || len(sub(points[j]!, points[i]!)) < need) continue;
     let clash = false;
     for (let k = i + 1; k < j; k++) if (taken[k]) clash = true;
     if (clash) continue;
@@ -618,6 +620,13 @@ function findLineSpans(points: Point[], tol: number, minLen: number) {
       else ends += signed(pts[k]!) / (2 * third);
     }
     if (Math.abs(mid - ends) > Math.max(0.06, tol * 0.2)) continue;
+    // Pull ends that drift off the line back to where it truly is straight, so the
+    // curve takes over gently instead of bending abruptly at the end of a long line.
+    const tight = Math.min(0.12, tol * 0.4);
+    while (j > i + 2 && j !== points.length - 1 && lineDist(points[j]!, c, d) > tight) j--;
+    while (i < j - 2 && i !== 0 && lineDist(points[i]!, c, d) > tight) i++;
+    const need2 = i === 0 || j === points.length - 1 ? minLen : minInterior;
+    if (len(sub(points[j]!, points[i]!)) < need2) continue;
     for (let k = i + 1; k < j; k++) taken[k] = 1;
     spans.push({ i, j, c, d });
   }
@@ -646,14 +655,22 @@ function intersect(c1: Point, d1: Point, c2: Point, d2: Point) {
  * straight stretches become exact lines, the parts between them become cubic
  * curves that leave and join each line along its own direction (no kinks).
  */
-function fitRun(points: Point[], tol: number, out: Segment[], t1?: Point, t2?: Point, minLen = 5) {
+function fitRun(
+  points: Point[],
+  tol: number,
+  out: Segment[],
+  t1?: Point,
+  t2?: Point,
+  minLen = 5,
+  minInterior = minLen,
+) {
   const n = points.length;
   if (n < 2) return;
   if (n === 2) {
     out.push({ type: "L", to: points[1]! });
     return;
   }
-  const spans = findLineSpans(points, tol, minLen);
+  const spans = findLineSpans(points, tol, minLen, minInterior);
   let cursor = 0;
   let from = points[0]!;
   let tanIn: Point | undefined = t1;
@@ -713,6 +730,20 @@ function fitContour(raw: Point[], opts: typeof DEFAULTS): TracedPath {
   const corners = findCorners(raw, opts.cornerAngle);
   const pts = smoothOutline(raw, new Set(corners), opts.outlineSmoothing);
   const n = pts.length;
+  // A "straight" stretch must be long for its shape: short near-flat bits of a big
+  // bowl (an O, a U) are curve, and turning them into lines leaves visible flats.
+  let bx0 = Infinity,
+    by0 = Infinity,
+    bx1 = -Infinity,
+    by1 = -Infinity;
+  for (const p of pts) {
+    bx0 = Math.min(bx0, p.x);
+    bx1 = Math.max(bx1, p.x);
+    by0 = Math.min(by0, p.y);
+    by1 = Math.max(by1, p.y);
+  }
+  const minLine = Math.max(5, 0.1 * Math.min(bx1 - bx0, by1 - by0));
+  const minInterior = Math.max(minLine, 0.25 * Math.min(bx1 - bx0, by1 - by0));
   if (corners.length === 0) {
     // Smooth loop: start at the leftmost point (curve tangent is vertical there).
     let s = 0;
@@ -720,7 +751,8 @@ function fitContour(raw: Point[], opts: typeof DEFAULTS): TracedPath {
     const loop = [...pts.slice(s), ...pts.slice(0, s), pts[s]!];
     const t = norm(sub(walk(pts, s, 2, 1), walk(pts, s, 2, -1)));
     const segments: Segment[] = [];
-    fitRun(loop, opts.tolerance, segments, t, mul(t, -1));
+    // No corners: the seam is arbitrary, so every straight stretch counts as interior.
+    fitRun(loop, opts.tolerance, segments, t, mul(t, -1), minInterior, minInterior);
     return { start: loop[0]!, segments };
   }
   const sharp = corners.map((ci, k) =>
@@ -755,6 +787,10 @@ function fitContour(raw: Point[], opts: typeof DEFAULTS): TracedPath {
       trimmed.length >= 2 ? trimmed : [run[0]!, run[run.length - 1]!],
       opts.tolerance,
       segments,
+      undefined,
+      undefined,
+      minLine,
+      minInterior,
     );
   }
   return { start: pts[corners[0]!]!, segments };
@@ -879,6 +915,230 @@ function alignAxes(paths: TracedPath[], width: number, height: number, gap = 0.2
   );
 }
 
+// ---------- 5. Rounded corners as true arcs ----------
+
+function bezierAt(from: Point, s: Extract<Segment, { type: "C" }>, t: number): Point {
+  const mt = 1 - t;
+  return {
+    x: mt ** 3 * from.x + 3 * mt * mt * t * s.c1.x + 3 * mt * t * t * s.c2.x + t ** 3 * s.to.x,
+    y: mt ** 3 * from.y + 3 * mt * mt * t * s.c1.y + 3 * mt * t * t * s.c2.y + t ** 3 * s.to.y,
+  };
+}
+
+type ArcCandidate = {
+  path: number;
+  /** Index of the line before the curve run; the run is (prev+1 .. next-1). */
+  prev: number;
+  next: number;
+  corner: Point;
+  dA: Point;
+  dB: Point;
+  turn: number;
+  side: number;
+  samples: Point[];
+  maxT: number;
+  radius: number;
+  rms: number;
+};
+
+/** RMS distance from the samples to the arc of radius r tangent to both lines. */
+function arcError(c: ArcCandidate, r: number) {
+  const t = r * Math.tan(c.turn / 2);
+  const t1 = sub(c.corner, mul(c.dA, t));
+  const centre = add(t1, mul({ x: -c.dA.y, y: c.dA.x }, r * c.side));
+  let sum = 0;
+  for (const p of c.samples) {
+    const e = len(sub(p, centre)) - r;
+    sum += e * e;
+  }
+  return Math.sqrt(sum / c.samples.length);
+}
+
+function bestRadius(c: ArcCandidate, lo: number, hi: number) {
+  // Golden-section search; the error is unimodal in r for a single corner.
+  const g = (Math.sqrt(5) - 1) / 2;
+  let a = lo,
+    b = hi;
+  let x1 = b - g * (b - a),
+    x2 = a + g * (b - a);
+  let f1 = arcError(c, x1),
+    f2 = arcError(c, x2);
+  for (let i = 0; i < 40; i++) {
+    if (f1 < f2) {
+      b = x2;
+      x2 = x1;
+      f2 = f1;
+      x1 = b - g * (b - a);
+      f1 = arcError(c, x1);
+    } else {
+      a = x1;
+      x1 = x2;
+      f1 = f2;
+      x2 = a + g * (b - a);
+      f2 = arcError(c, x2);
+    }
+  }
+  return (a + b) / 2;
+}
+
+/**
+ * Logos are drawn with circular corner radii, but a small or soft raster only
+ * hints at them, so a free-form fit comes out flattened. Every curve that joins
+ * two straight edges is refitted as a circular arc tangent to both edges, and
+ * corners with nearly the same radius are given exactly the same radius.
+ */
+function roundCornersAsArcs(paths: TracedPath[], tol: number): TracedPath[] {
+  // Rotate each path to start on a line so curve runs never wrap past the start.
+  const rotated = paths.map((p) => {
+    const n = p.segments.length;
+    const starts = [p.start, ...p.segments.slice(0, -1).map((s) => s.to)];
+    const k = p.segments.findIndex((s) => s.type === "L");
+    if (k <= 0) return p;
+    return {
+      start: starts[k]!,
+      segments: [...p.segments.slice(k), ...p.segments.slice(0, k)].slice(0, n),
+    };
+  });
+  const candidates: ArcCandidate[] = [];
+  rotated.forEach((p, pi) => {
+    const segs = p.segments,
+      n = segs.length;
+    if (segs[0]?.type !== "L") return;
+    const starts = [p.start, ...segs.slice(0, -1).map((s) => s.to)];
+    for (let i = 0; i < n; i++) {
+      if (segs[i]!.type !== "L") continue;
+      let j = i + 1;
+      while (j < n && segs[j]!.type === "C") j++;
+      if (j === i + 1) continue;
+      const next = j % n;
+      if (segs[next]!.type !== "L" || next === i) continue;
+      const a0 = starts[i]!,
+        a1 = segs[i]!.to,
+        b0 = starts[next]!,
+        b1 = segs[next]!.to;
+      const dA = norm(sub(a1, a0)),
+        dB = norm(sub(b1, b0));
+      const cross = dA.x * dB.y - dA.y * dB.x;
+      const turn = Math.acos(Math.max(-1, Math.min(1, dot(dA, dB))));
+      if (turn < (25 * Math.PI) / 180 || turn > (155 * Math.PI) / 180) continue;
+      const corner = intersect(a0, dA, b0, dB);
+      if (!corner) continue;
+      const samples: Point[] = [];
+      for (let k = i + 1; k < j; k++) {
+        const s = segs[k]! as Extract<Segment, { type: "C" }>;
+        for (let q = 1; q < 12; q++) samples.push(bezierAt(starts[k]!, s, q / 12));
+        if (k < j - 1) samples.push(s.to);
+      }
+      // The arc may not eat more than (almost) the whole of either neighbouring line.
+      const maxT = Math.min(len(sub(corner, a0)), len(sub(b1, corner))) * 0.98;
+      if (maxT <= 0.3) continue;
+      candidates.push({
+        path: pi,
+        prev: i,
+        next,
+        corner,
+        dA,
+        dB,
+        turn,
+        side: Math.sign(cross),
+        samples,
+        maxT,
+        radius: 0,
+        rms: Infinity,
+      });
+    }
+  });
+  const accepted: ArcCandidate[] = [];
+  for (const c of candidates) {
+    const rMax = c.maxT / Math.tan(c.turn / 2);
+    if (rMax < 0.3) continue;
+    c.radius = bestRadius(c, 0.2, rMax);
+    c.rms = arcError(c, c.radius);
+    // Only a genuine circular corner: the arc must stay within the normal fitting tolerance.
+    if (c.rms <= tol) accepted.push(c);
+  }
+  // Equal radii for corners that are clearly meant to match.
+  const sorted = [...accepted].sort((p, q) => p.radius - q.radius);
+  for (let i = 0; i < sorted.length;) {
+    let j = i + 1;
+    while (j < sorted.length && sorted[j]!.radius <= sorted[i]!.radius * 1.12) j++;
+    const group = sorted.slice(i, j);
+    const mean = group.reduce((sum, c) => sum + c.radius, 0) / group.length;
+    for (const c of group) {
+      const rMax = c.maxT / Math.tan(c.turn / 2);
+      const r = Math.min(mean, rMax);
+      if (arcError(c, r) <= tol) c.radius = r;
+    }
+    i = j;
+  }
+  return rotated.map((p, pi) => {
+    const mine = accepted.filter((c) => c.path === pi);
+    if (!mine.length) return p;
+    const segs = p.segments.map((s) => ({ ...s })) as Segment[];
+    const replace = new Map<number, Segment[]>();
+    const skip = new Set<number>();
+    for (const c of mine) {
+      const t = c.radius * Math.tan(c.turn / 2);
+      const t1 = sub(c.corner, mul(c.dA, t)),
+        t2 = add(c.corner, mul(c.dB, t));
+      // The arc sweeps the same angle the outline turns; standard cubic circle handle length.
+      const h = (4 / 3) * Math.tan(c.turn / 4) * c.radius;
+      for (let k = c.prev + 1; k !== c.next; k = (k + 1) % segs.length) skip.add(k);
+      replace.set(c.prev, [
+        { type: "L", to: t1 },
+        { type: "C", c1: add(t1, mul(c.dA, h)), c2: sub(t2, mul(c.dB, h)), to: t2 },
+      ]);
+    }
+    const out: Segment[] = [];
+    segs.forEach((s, k) => {
+      if (skip.has(k)) return;
+      out.push(...(replace.get(k) ?? [s]));
+    });
+    // A run that wrapped to the start moved the path's first point too.
+    const last = out[out.length - 1]!;
+    return { start: last.to, segments: out };
+  });
+}
+
+// ---------- 6. Smooth line-to-curve joins ----------
+
+/**
+ * After straightening and aligning lines, a curve can leave a line at a slightly
+ * different angle, which shows as a kink. Where a line and a curve meet at a
+ * small angle (a smooth join, not a corner), the curve's handle is turned to
+ * continue exactly along the line.
+ */
+function smoothJoins(paths: TracedPath[], maxAngle = (20 * Math.PI) / 180): TracedPath[] {
+  const cosMax = Math.cos(maxAngle);
+  return paths.map((p) => {
+    const segs = p.segments.map((s) => ({ ...s })) as Segment[];
+    const n = segs.length;
+    const starts = [p.start, ...segs.slice(0, -1).map((s) => s.to)];
+    const align = (handle: Point, anchorPt: Point, dir: Point) => {
+      const v = sub(handle, anchorPt),
+        l = len(v);
+      if (l < 1e-9 || dot(norm(v), dir) < cosMax) return handle;
+      return add(anchorPt, mul(dir, l));
+    };
+    for (let k = 0; k < n; k++) {
+      const s = segs[k]!;
+      if (s.type !== "C") continue;
+      const prev = segs[(k - 1 + n) % n]!,
+        next = segs[(k + 1) % n]!;
+      const a = starts[k]!;
+      if (prev.type === "L") {
+        const d = norm(sub(a, starts[(k - 1 + n) % n]!));
+        s.c1 = align(s.c1, a, d);
+      }
+      if (next.type === "L") {
+        const d = norm(sub(s.to, next.to)); // pointing back from the join into the curve side
+        s.c2 = align(s.c2, s.to, d);
+      }
+    }
+    return { start: p.start, segments: segs };
+  });
+}
+
 // ---------- Public API ----------
 
 export function vectorize(
@@ -892,7 +1152,9 @@ export function vectorize(
   const paths = traceContours(smoothed, width, height, opts.threshold)
     .filter((c) => Math.abs(signedArea(c)) >= opts.minArea)
     .map((c) => snapAxisLines(fitContour(c, opts)));
-  return alignAxes(paths, width, height);
+  // Arcs recompute line ends from intersections; re-straighten so axis lines stay exactly axis-aligned.
+  const arced = roundCornersAsArcs(paths, opts.tolerance).map(snapAxisLines);
+  return smoothJoins(alignAxes(arced, width, height));
 }
 
 const fmt = (n: number) => {
