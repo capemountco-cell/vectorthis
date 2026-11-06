@@ -4,7 +4,7 @@ export type ModeInfo = { id: TaskMode; label: string; hint: string; short: strin
 
 export const MODES: ModeInfo[] = [
   { id: "trace", label: "Exact trace", hint: "Pixel-exact vector of your file. Instant, no AI — best for clean logo files.", short: "Pixel-exact. Instant, no AI.", ai: false },
-  { id: "recreate", label: "Recreate", hint: "AI redraws a clean black version from a photo or rough file, then traces it.", short: "AI cleans up a photo or rough file.", ai: true },
+  { id: "recreate", label: "AI Trace", hint: "AI redraws a clean black version from a photo or rough file, then traces it.", short: "AI cleans up a photo or rough file.", ai: true },
   { id: "replace", label: "Change text", hint: "Keeps your lettering style and icon, swaps in new wording.", short: "Same style, new wording.", ai: true },
   { id: "blend", label: "New shape", hint: "Reshapes your mark to take on the features of a second image.", short: "Reshape with a second image.", ai: true },
 ];
