@@ -1,4 +1,5 @@
-import { ArrowRight, ImagePlus, Plus, Upload } from "lucide-react";
+import { useState } from "react";
+import { ArrowRight, ImagePlus, Plus, Upload, X } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { useImageDrop } from "@/hooks/use-image-drop";
 import type { RecentItem } from "@/lib/recent";
@@ -24,10 +25,13 @@ type Props = {
   error: string | null;
   recent: RecentItem[];
   onOpenRecent: (item: RecentItem) => void;
+  onDeleteRecent: (item: RecentItem) => void;
+  onClearRecent: () => void;
 };
 
 export function StartScreen(p: Props) {
   const info = modeInfo(p.mode);
+  const [confirmClear, setConfirmClear] = useState(false);
   const logoDrop = useImageDrop((files) => { const f = files[0]; if (f) p.onFile(f); });
   const shapeDrop = useImageDrop((files) => { const f = files[0]; if (f) p.onShape(f); });
   return (
@@ -184,13 +188,33 @@ export function StartScreen(p: Props) {
 
       {p.recent.length > 0 && (
         <section aria-labelledby="recent-h" className="flex w-full max-w-[760px] flex-col gap-3">
-          <div className="flex items-center justify-between">
-            <h2 id="recent-h" className="text-[13px] font-semibold text-subtle">Recent</h2>
-            <span className="text-xs text-muted-foreground">Saved on this device</span>
+          <div className="flex min-h-11 items-center justify-between gap-3">
+            <h2 id="recent-h" className="text-[13px] font-semibold text-subtle">
+              Recent <span className="font-normal text-muted-foreground">· saved on this device</span>
+            </h2>
+            {confirmClear ? (
+              <div role="group" aria-label="Clear all recent logos?" className="flex items-center gap-1.5">
+                <span className="text-xs text-subtle">Clear all?</span>
+                <button
+                  type="button"
+                  onClick={() => { p.onClearRecent(); setConfirmClear(false); }}
+                  className="h-9 rounded-lg bg-destructive px-3 text-xs font-semibold text-destructive-foreground"
+                >
+                  Clear
+                </button>
+                <button type="button" onClick={() => setConfirmClear(false)} className="h-9 rounded-lg border border-border bg-card px-3 text-xs font-medium">
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button type="button" onClick={() => setConfirmClear(true)} className="h-9 rounded-lg px-2 text-xs font-medium text-muted-foreground hover:text-foreground">
+                Clear all
+              </button>
+            )}
           </div>
           <ul className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             {p.recent.map((r) => (
-              <li key={r.id}>
+              <li key={r.id} className="relative">
                 <button type="button" onClick={() => p.onOpenRecent(r)} className="flex w-full flex-col gap-2 text-left">
                   <span className="flex aspect-[4/3] w-full items-center justify-center overflow-hidden rounded-[14px] border border-border bg-card p-4">
                     <img src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(r.svg)}`} alt="" className="max-h-full max-w-full object-contain" />
@@ -199,6 +223,15 @@ export function StartScreen(p: Props) {
                     <span className="truncate font-medium">{r.name}</span>
                     <span className="shrink-0 font-mono text-[11px] uppercase text-muted-foreground">{modeInfo(r.mode as TaskMode).label}</span>
                   </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => p.onDeleteRecent(r)}
+                  aria-label={`Delete ${r.name} from recent`}
+                  title="Delete"
+                  className="absolute top-1.5 right-1.5 inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-card/95 text-subtle shadow-[0_1px_3px_rgba(17,17,17,0.08)] hover:text-destructive"
+                >
+                  <X className="h-4 w-4" aria-hidden="true" />
                 </button>
               </li>
             ))}

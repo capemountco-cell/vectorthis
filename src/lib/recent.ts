@@ -36,3 +36,34 @@ export function addRecent(
   }
   return list;
 }
+
+function save(list: RecentItem[], storage: Pick<Storage, "setItem"> | undefined) {
+  try {
+    storage?.setItem(KEY, JSON.stringify(list));
+  } catch {
+    // Blocked storage: the change still applies for this session.
+  }
+  return list;
+}
+
+/**
+ * Removes one saved logo; returns the remaining list. Works from the list on screen
+ * when given, so a session without storage can still delete its items.
+ */
+export function removeRecent(
+  id: string,
+  current?: RecentItem[],
+  storage: Pick<Storage, "getItem" | "setItem"> | undefined = globalThis.localStorage,
+): RecentItem[] {
+  return save((current ?? loadRecent(storage)).filter((r) => r.id !== id), storage);
+}
+
+/** Removes every saved logo from this device. */
+export function clearRecent(storage: Pick<Storage, "removeItem"> | undefined = globalThis.localStorage): RecentItem[] {
+  try {
+    storage?.removeItem(KEY);
+  } catch {
+    // Nothing else to do: the in-memory list is cleared either way.
+  }
+  return [];
+}
