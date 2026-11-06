@@ -28,6 +28,22 @@ describe("Independent logo tasks", () => {
     expect(flatten).not.toHaveBeenCalled();
   });
 
+  it("sends measured geometry and the traced-reference flag with the prepared original", async () => {
+    const stream = vi.fn(async (form: FormData, frame: (src: string, final: boolean) => void) => {
+      expect((form.get("image") as File).name).toBe("prepared.png");
+      expect(form.get("geometry")).toBe("2 separate solid shapes");
+      expect(form.get("reference")).toBe("traced");
+      frame("logo", true);
+    });
+    await executeLogoTask(file("a.png"), options, new AbortController().signal, () => {}, {
+      flatten: async () => file("prepared.png"),
+      describe: async () => ({ geometry: "2 separate solid shapes", traced: true }),
+      stream,
+      prepare: async (src) => src,
+    });
+    expect(stream).toHaveBeenCalledOnce();
+  });
+
   it("starts every task concurrently without an app-imposed count limit and preserves out-of-order results", async () => {
     const finish: Array<() => void> = [];
     const dependencies: LogoTaskDependencies<string> = {

@@ -12,7 +12,25 @@ export const SHAPE_BRIEF_INSTRUCTIONS = [
   "Include the TIGHT NESTING requirement explicitly in the brief, with where each element's inner edge sits against the other. Output only the brief.",
 ].join("\n");
 
-export function buildLogoPrompt(text: string, correction = "", mode: LogoMode = "replace", brief = "") {
+/** Applies to every mode: the AI must trace, not reinterpret, the original's shapes. */
+export const SHAPE_FIDELITY =
+  "SHAPE FIDELITY: Treat the original's artwork as exact geometry to copy, not inspiration. Keep its overall width:height ratio, every element's position and size relative to the whole mark, every stroke and gap width, and every corner exactly as drawn: straight edges stay ruler-straight, right angles stay exact right angles, rounded corners keep their radius, and no corner becomes rounded, bevelled or pointed. Do not simplify, add, remove, thicken, thin, shift or rebalance any part.";
+
+/** Change-text mode: the wordmark may get wider, but icons and emblems must stay exact. */
+export const ARTWORK_FIDELITY =
+  "ARTWORK FIDELITY: Copy every non-text element (icon, emblem, frame, line, dot) as exact geometry: same proportions, size relative to the lettering, position, stroke widths, gaps and corners. Straight edges stay ruler-straight, right angles stay exact, rounded corners keep their radius, and no corner becomes rounded, bevelled or pointed.";
+
+export type PromptExtras = {
+  /** Measured facts from the client's vector trace of the original (recreate only). */
+  geometry?: string;
+  /** The original was sent as a clean black rendering traced from the upload. */
+  tracedReference?: boolean;
+};
+
+const MAX_GEOMETRY = 1500;
+
+export function buildLogoPrompt(text: string, correction = "", mode: LogoMode = "replace", brief = "", extras: PromptExtras = {}) {
+  const geometry = (extras.geometry ?? "").replace(/\s+/g, " ").trim().slice(0, MAX_GEOMETRY);
   const glyphs = Array.from(text);
   const spelling = mode === "blend" ? [
     "HYBRID REDESIGN: Reshape the original logo's existing elements following the brief below. Keep the same number of separate elements, their arrangement, orientation and mirrored/interlocking relationship. Do not reduce it to a single standalone symbol.",
@@ -33,6 +51,14 @@ export function buildLogoPrompt(text: string, correction = "", mode: LogoMode = 
     "LETTERING REFERENCE: The original uploaded logo is the sole source of lettering style, never the generated draft. Inspect its actual letterforms rather than substituting a similar stock font.",
     "Retain the original stroke weight and contrast, slant, baseline, x-height, cap height, proportions, curves, corners, terminals, negative spaces and spacing rhythm. Reuse original glyph shapes when the same character and case appear; construct missing glyphs and different-case glyphs with the same design language. Preserve non-text icons and decorative details and their relationship to the wordmark. Ignore the photo or background behind the original logo.",
   ].join("\n");
+  const originalIndex = correction ? 2 : 1;
+  const reference = extras.tracedReference
+    ? `REFERENCE QUALITY: Image ${originalIndex} is a clean, high-resolution black rendering of the original logo, traced precisely from the user's upload. Its shapes are already exact: reproduce them edge for edge.`
+    : "";
+  const measured =
+    mode === "recreate" && geometry
+      ? `GEOMETRY LOCK (measured from a precise vector trace of the original; the result must match every point): ${geometry}`
+      : "";
   const task = correction
     ? `REFERENCE ROLES: Image 1 is the generated draft to correct. Image 2 is the original uploaded logo and the authoritative lettering reference.\nREQUESTED CORRECTION: ${JSON.stringify(correction)}. Apply this as a local edit to the draft, not a new redesign. Preserve already-correct glyphs, layout and decoration; repair the affected letter(s) using Image 2's design language, not malformed shapes from Image 1. If the correction conflicts with the required wordmark or the original lettering style, the required wordmark and original style take priority.`
     : mode === "blend"
@@ -42,13 +68,18 @@ export function buildLogoPrompt(text: string, correction = "", mode: LogoMode = 
         : "REFERENCE ROLES: Image 1 is the original uploaded logo and the authoritative lettering reference. Recreate its logo with only the wordmark text replaced. Do not redesign or reinterpret the brand.";
   return [
     task,
+    reference,
     spelling,
+    mode === "blend" ? "" : mode === "recreate" ? SHAPE_FIDELITY : ARTWORK_FIDELITY,
+    measured,
     style,
     "OUTPUT: A flat solid pure black (#000000) logo on a plain pure white background, fully visible and centered with margin. No gradients, shadows, textures, mockups or extra elements.",
     mode === "blend"
       ? "FINAL CHECK BEFORE RETURNING: Count the separate elements and compare the layout against the original logo — they must match, with each element reshaped as the brief describes. Check the gap: if the elements sit apart or leave open space between them, move them closer until only one narrow, even channel separates them, without touching. Remove any background. Return only the image."
       : mode === "recreate"
-        ? "FINAL CHECK BEFORE RETURNING: Compare all lettering and artwork directly against the original uploaded logo, never the draft. Restore every original glyph and detail, repair any style drift, and ensure no background remains. Corrections must not change the original wording or lettering style. Return only the image."
+        ? `FINAL CHECK BEFORE RETURNING: Compare all lettering and artwork directly against the original uploaded logo, never the draft. Restore every original glyph and detail, repair any style drift, and ensure no background remains. Corrections must not change the original wording or lettering style.${measured ? " Re-check every GEOMETRY LOCK fact (proportions, shape extents, straight edges, which corners are rounded) and fix any mismatch." : ""} Return only the image.`
         : `FINAL CHECK BEFORE RETURNING: Read the rendered wordmark left to right and compare every character, case and space against ${JSON.stringify(text)} and the numbered inventory. Repair any extra, missing, repeated or swapped characters. Then compare lettering to the original reference and restore any style drift. Return only the image.`,
-  ].join("\n\n");
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }

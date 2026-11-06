@@ -4,6 +4,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { streamImage } from "@/lib/stream-image";
 import { toOutputs } from "@/lib/logo-convert";
+import { prepareReference, shapeMatch, type PreparedReference } from "@/lib/reference-prep";
 import { downloadFile, isMobileSaveDevice, savePng } from "@/lib/save-png";
 import { Button } from "@/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -67,12 +68,13 @@ function Index() {
   const [background, setBackground] = useState("transparent");
   const [frame, setFrame] = useState<string | null>(null);
   const [final, setFinal] = useState(false);
-  const [out, setOut] = useState<{ png: string; whitePng: string; svg: string; pngFile: File; whitePngFile: File; svgFile: File } | null>(null);
+  const [out, setOut] = useState<{ png: string; whitePng: string; svg: string; pngFile: File; whitePngFile: File; svgFile: File; match: number | null } | null>(null);
+  const [reference, setReference] = useState<PreparedReference | null>(null);
   const [progress, setProgress] = useState(0);
   const [raw, setRaw] = useState<string | null>(null);
   const [fix, setFix] = useState("");
   const [more, setMore] = useState(false);
-  const [alts, setAlts] = useState<{ name: string; src?: string; err?: string }[]>([]);
+  const [alts, setAlts] = useState<{ name: string; src?: string; err?: string; match?: number | null }[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savingPng, setSavingPng] = useState(false);
@@ -106,7 +108,8 @@ function Index() {
       if (m === "trace") {
         // Exact trace: vectorize the untouched upload, no AI redraw.
         setAlts([]);
-        await pickVersion(await readAsDataUrl(source), m);
+        setReference(null);
+        await pickVersion(await readAsDataUrl(source), m, null);
         return;
       }
       const form = new FormData();
@@ -116,7 +119,12 @@ function Index() {
         form.append(key, new File([toFile(raw, "draft.png", "image/png")], "draft.png", { type: "image/png" }));
         form.append("fix", correction);
       }
-      form.append(key, await onWhite(source));
+      // Clean logos go to the AI as a crisp 1024px rendering of their exact trace, plus measured geometry.
+      const ref = await prepareReference(source);
+      setReference(ref);
+      form.append(key, ref.file);
+      if (ref.geometry) form.append("geometry", ref.geometry);
+      if (ref.traced) form.append("reference", "traced");
       if (m === "blend" && shape) form.append(key, await onWhite(shape));
       form.append("text", text.trim());
       form.append("mode", m);
@@ -130,7 +138,10 @@ function Index() {
           f.append("provider", id);
           let got = "";
           streamImage("/api/edit-image", f, (src, fin) => { if (fin) got = src; })
-            .then(() => setAlts((a) => a.map((x) => (x.name === n ? { name: n, src: got } : x))))
+            .then(async () => {
+              const match = got ? shapeMatch(ref, (await toOutputs(got)).signature) : null;
+              setAlts((a) => a.map((x) => (x.name === n ? { name: n, src: got, match } : x)));
+            })
             .catch((e) => setAlts((a) => a.map((x) => (x.name === n ? { name: n, err: e instanceof Error ? e.message : "Failed" } : x))));
         });
       } else setAlts([]);
@@ -142,8 +153,8 @@ function Index() {
         if (isFinal) last = src;
       });
       if (last) {
-        if (more) setAlts((a) => a.map((x) => (x.name === "OpenAI" ? { name: "OpenAI", src: last } : x)));
-        await pickVersion(last);
+        const match = await pickVersion(last, m, ref);
+        if (more) setAlts((a) => a.map((x) => (x.name === "OpenAI" ? { name: "OpenAI", src: last, match } : x)));
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong");
@@ -153,7 +164,7 @@ function Index() {
     }
   }
 
-  async function pickVersion(last: string, m: TaskMode = mode) {
+  async function pickVersion(last: string, m: TaskMode = mode, ref: PreparedReference | null = reference): Promise<number | null> {
     {
       {
         setFrame(last);
@@ -163,14 +174,18 @@ function Index() {
         setFix("");
         const o = await toOutputs(last);
         const slug = m === "recreate" || m === "trace" ? "logo" : text.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "logo";
-        setOut({ ...o, pngFile: toFile(o.png, `${slug}.png`, "image/png"), whitePngFile: toFile(o.whitePng, `${slug}-white.png`, "image/png"), svgFile: toFile(o.svg, `${slug}.svg`, "image/svg+xml") });
+        const match = m === "recreate" ? shapeMatch(ref, o.signature) : null;
+        setOut({ ...o, match, pngFile: toFile(o.png, `${slug}.png`, "image/png"), whitePngFile: toFile(o.whitePng, `${slug}-white.png`, "image/png"), svgFile: toFile(o.svg, `${slug}.svg`, "image/svg+xml") });
         setProgress(100);
+        return match;
       }
     }
   }
 
 
   const shown = (background === "white" ? out?.whitePng : out?.png) ?? frame;
+  const scored = alts.map((a) => a.match).filter((v): v is number => typeof v === "number");
+  const bestMatch = scored.length > 1 ? Math.max(...scored) : null;
   function uploadLogo(f: File) {
     resetResult();
     if (preview) URL.revokeObjectURL(preview);
@@ -282,6 +297,11 @@ function Index() {
                 {a.src ? <img src={a.src} alt={`${a.name} version`} className="max-h-full max-w-full object-contain" /> : <span className="px-1 text-center text-muted-foreground">{a.err ? "Failed" : "Working…"}</span>}
               </div>
               <span className="font-bold">{a.name}</span>
+              {a.match != null && (
+                <span className={a.match === bestMatch ? "font-bold text-primary" : "text-muted-foreground"}>
+                  {Math.round(a.match * 100)}% match{a.match === bestMatch ? " · best" : ""}
+                </span>
+              )}
               {a.err && <span className="line-clamp-2 text-destructive" title={a.err}>{a.err}</span>}
             </button>
           ))}
@@ -360,6 +380,12 @@ function Index() {
         </div>
       )}
       {!batch && saveError && <p role="alert" className="text-sm text-destructive">{saveError}</p>}
+      {!batch && out && out.match != null && (
+        <p className="text-xs text-muted-foreground" aria-label="Shape match">
+          Shape match with your original: <span className={`font-bold ${out.match >= 0.95 ? "text-foreground" : "text-destructive"}`}>{Math.round(out.match * 100)}%</span>
+          {out.match < 0.95 && " — the AI drifted. Try again, compare 3 versions, or use Exact trace for a pixel-exact copy."}
+        </p>
+      )}
       {!batch && out && !busy && mode !== "trace" && (
         <div className="flex gap-2">
           <input

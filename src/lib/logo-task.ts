@@ -17,6 +17,8 @@ export type LogoTaskDependencies<T> = {
     signal: AbortSignal,
   ) => Promise<void>;
   prepare: (src: string) => Promise<T>;
+  /** Extra prompt facts about the original (measured geometry, clean traced reference). */
+  describe?: (file: File) => Promise<{ geometry?: string; traced?: boolean }>;
   /** Reads the upload for trace mode (defaults to a data URL). */
   read?: (file: File) => Promise<string>;
 };
@@ -50,6 +52,9 @@ export async function executeLogoTask<T>(
   const form = new FormData();
   const key = options.mode === "blend" ? "image[]" : "image";
   form.append(key, await dependencies.flatten(file));
+  const facts = (await dependencies.describe?.(file)) ?? {};
+  if (facts.geometry) form.append("geometry", facts.geometry);
+  if (facts.traced) form.append("reference", "traced");
   if (options.mode === "blend") {
     if (!options.shape) throw new Error("Add a shape reference first.");
     form.append(key, await dependencies.flatten(options.shape));

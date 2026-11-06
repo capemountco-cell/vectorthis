@@ -1,5 +1,6 @@
 import { withWhiteBackground } from "@/lib/png-background";
 import { coverageFromRgba, toSvg, vectorize } from "@/lib/vectorize";
+import { coverageSignature } from "@/lib/logo-fidelity";
 
 // Turns a single-colour logo (any ink/background colours, or transparent) into black PNG variants and a traced SVG (browser only).
 async function loadPixels(src: string) {
@@ -61,6 +62,8 @@ export async function toOutputs(src: string) {
     ? { x: ink.x0 - margin - x0, y: ink.y0 - margin - y0, width: ink.x1 - ink.x0 + 1 + 2 * margin, height: ink.y1 - ink.y0 + 1 + 2 * margin }
     : undefined;
   const svg = toSvg(vectorize(croppedCoverage, cw, ch), cw, ch, view);
+  // Shape fingerprint, so a redraw can be scored against the original.
+  const signature = coverageSignature(croppedCoverage, cw, ch);
   if (Math.max(cw, ch) < 1024) {
     // Small source: a pixel-sized PNG would be blurry, so render both PNGs from the traced vector.
     const vw = view?.width ?? cw,
@@ -76,10 +79,10 @@ export async function toOutputs(src: string) {
     const big = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const largePng = canvas.toDataURL("image/png");
     ctx.putImageData(new ImageData(withWhiteBackground(big.data), canvas.width, canvas.height), 0, 0);
-    return { png: largePng, whitePng: canvas.toDataURL("image/png"), svg };
+    return { png: largePng, whitePng: canvas.toDataURL("image/png"), svg, signature };
   }
   // Composite the same cropped pixels onto white, without another AI request.
   ctx.putImageData(new ImageData(withWhiteBackground(cd), cropped.width, cropped.height), 0, 0);
   const whitePng = canvas.toDataURL("image/png");
-  return { png, whitePng, svg };
+  return { png, whitePng, svg, signature };
 }
