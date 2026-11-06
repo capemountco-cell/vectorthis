@@ -4,3 +4,4 @@
 - [x] New shape: tighten the gap so the two mirrored notes nest closely (verified with two live runs).
 - [x] Default to Recreate and add concurrent batch uploads with independent progress, results, retries, cancellation, and downloads.
 - [x] Verify batch uploads, task independence, and collage layout: 22 tests passed; controlled four-task upload/retry/download checks passed; two concurrent live OpenAI recreations finished and downloaded successfully.
+- [x] Replace imagetracerjs with a sub-pixel vectorizer: smooth curves, sharp corners, no stroke bloat; wrong pixels vs source dropped from ~1,600–2,200 to ≤1 on sample logos.
