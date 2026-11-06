@@ -1,24 +1,27 @@
-import { Switch } from "@/components/ui/switch";
-import { Image as ImageIcon } from "lucide-react";
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
-import { streamImage } from "@/lib/stream-image";
-import { toOutputs } from "@/lib/logo-convert";
-import { prepareReference, shapeMatch, type PreparedReference } from "@/lib/reference-prep";
-import { downloadFile, isMobileSaveDevice, savePng } from "@/lib/save-png";
-import { Button } from "@/components/ui/button";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { DEFAULT_LOGO_MODE, readAsDataUrl, type TaskMode } from "@/lib/logo-task";
+import { useEffect, useRef, useState } from "react";
+import { LayoutGrid } from "lucide-react";
 import { BatchLogos } from "@/components/batch-logos";
-import { useImageDrop } from "@/hooks/use-image-drop";
+import { BrandMark } from "@/components/app/brand";
+import { baseName, modeInfo } from "@/components/app/modes";
+import { ProcessingScreen } from "@/components/app/processing-screen";
+import { ResultWorkspace, type Version } from "@/components/app/result-workspace";
+import { StartScreen } from "@/components/app/start-screen";
+import { toOutputs } from "@/lib/logo-convert";
+import { flattenLogo, logoFile } from "@/lib/logo-files";
+import { DEFAULT_TASK_MODE, readAsDataUrl, type TaskMode } from "@/lib/logo-task";
+import { addRecent, loadRecent, type RecentItem } from "@/lib/recent";
+import { prepareReference, shapeMatch, type PreparedReference } from "@/lib/reference-prep";
+import { buildResult, resultFromRecent, type LogoResult } from "@/lib/result-model";
+import { streamImage } from "@/lib/stream-image";
 
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Relogo — Recreate logos or change their text" },
-      { name: "description", content: "Recreate your logo or replace its text, remove the background, and save black SVGs or transparent and white PNGs." },
-      { property: "og:title", content: "Relogo — Recreate logos or change their text" },
-      { property: "og:description", content: "Recreate your logo or replace its text, remove the background, and save black SVGs or transparent and white PNGs." },
+      { title: "Vectorthis — Clean, exact vectors from any logo" },
+      { name: "description", content: "Drop a logo and get a clean, exact SVG and transparent PNG. Trace it pixel-exact, recreate it with AI, or change its text." },
+      { property: "og:title", content: "Vectorthis — Clean, exact vectors from any logo" },
+      { property: "og:description", content: "Drop a logo and get a clean, exact SVG and transparent PNG." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
     ],
@@ -26,97 +29,103 @@ export const Route = createFileRoute("/")({
   component: Index,
 });
 
-function toFile(href: string, name: string, type: string) {
-  const bin = href.startsWith("data:") && href.includes(";base64,")
-    ? Uint8Array.from(atob(href.split(",")[1] ?? ""), (c) => c.charCodeAt(0))
-    : new TextEncoder().encode(href);
-  return new File([bin], name, { type });
-}
-
-// Must be called directly from the tap (no awaits before share) or iPhone opens the image instead.
-function saveSvg(file: File) {
-  if (isMobileSaveDevice() && typeof navigator.share === "function" && navigator.canShare?.({ files: [file] })) {
-    navigator.share({ files: [file] }).catch(() => {});
-    return;
-  }
-  downloadFile(file);
-}
-
-// Transparent uploads read as solid black to the AI, so place them on white first.
-async function onWhite(f: File): Promise<File> {
-  const bmp = await createImageBitmap(f);
-  const c = document.createElement("canvas");
-  c.width = bmp.width;
-  c.height = bmp.height;
-  const ctx = c.getContext("2d");
-  if (!ctx) throw new Error("Could not read your logo.");
-  ctx.fillStyle = "#fff";
-  ctx.fillRect(0, 0, c.width, c.height);
-  ctx.drawImage(bmp, 0, 0);
-  const blob = await new Promise<Blob | null>((r) => c.toBlob(r, "image/png"));
-  return blob ? new File([blob], "upload.png", { type: "image/png" }) : f;
-}
-
 function Index() {
+  const [mode, setMode] = useState<TaskMode>(DEFAULT_TASK_MODE);
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
+  const [dims, setDims] = useState("");
   const [shape, setShape] = useState<File | null>(null);
   const [shapePreview, setShapePreview] = useState<string | null>(null);
   const [text, setText] = useState("");
-  const [mode, setMode] = useState<TaskMode>(DEFAULT_LOGO_MODE);
-  const [batch, setBatch] = useState(false);
-  const [background, setBackground] = useState("transparent");
-  const [frame, setFrame] = useState<string | null>(null);
-  const [final, setFinal] = useState(false);
-  const [out, setOut] = useState<{ png: string; whitePng: string; svg: string; pngFile: File; whitePngFile: File; svgFile: File; match: number | null } | null>(null);
-  const [reference, setReference] = useState<PreparedReference | null>(null);
-  const [progress, setProgress] = useState(0);
-  const [raw, setRaw] = useState<string | null>(null);
-  const [fix, setFix] = useState("");
   const [more, setMore] = useState(false);
-  const [alts, setAlts] = useState<{ name: string; src?: string; err?: string; match?: number | null }[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [savingPng, setSavingPng] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [mobileSave, setMobileSave] = useState(false);
-  useEffect(() => setMobileSave(isMobileSaveDevice()), []);
+  const [batch, setBatch] = useState(false);
 
-  function resetResult() {
-    setOut(null);
-    setFrame(null);
-    setRaw(null);
-    setAlts([]);
-    setFinal(false);
-    setFix("");
+  const [busy, setBusy] = useState(false);
+  const [busyMode, setBusyMode] = useState<TaskMode>(DEFAULT_TASK_MODE);
+  const [progress, setProgress] = useState(0);
+  const [frame, setFrame] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<LogoResult | null>(null);
+  const [raw, setRaw] = useState<string | null>(null);
+  const [reference, setReference] = useState<PreparedReference | null>(null);
+  const [versions, setVersions] = useState<Version[]>([]);
+  const [recent, setRecent] = useState<RecentItem[]>([]);
+  const controller = useRef<AbortController | null>(null);
+
+  useEffect(() => setRecent(loadRecent()), []);
+
+  function chooseFile(f: File) {
+    if (preview) URL.revokeObjectURL(preview);
+    const url = URL.createObjectURL(f);
+    setFile(f);
+    setPreview(url);
     setError(null);
-    setSaveError(null);
+    setDims("");
+    void createImageBitmap(f).then((b) => { setDims(`${b.width} × ${b.height}`); b.close(); }).catch(() => {});
+    if (mode === "trace" || mode === "recreate") void run({ source: f, m: mode, original: url });
   }
 
-  async function run(correction?: string, m: TaskMode = mode, source: File | null = file) {
-    if (!source || (m === "replace" && !text.trim()) || (m === "blend" && !shape)) return;
+  function chooseShape(f: File) {
+    if (shapePreview) URL.revokeObjectURL(shapePreview);
+    setShape(f);
+    setShapePreview(URL.createObjectURL(f));
+  }
+
+  // Paste an image anywhere on the start screen (⌘V / Ctrl+V).
+  useEffect(() => {
+    if (busy || result || batch) return;
+    const onPaste = (e: ClipboardEvent) => {
+      const item = Array.from(e.clipboardData?.files ?? []).find((f) => f.type.startsWith("image/"));
+      if (item) { e.preventDefault(); chooseFile(item); }
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  });
+
+  async function finish(src: string, m: TaskMode, ref: PreparedReference | null, name: string, original: string | null) {
+    const o = await toOutputs(src);
+    const match = m === "recreate" ? shapeMatch(ref, o.signature) : null;
+    const accuracy = m === "trace" ? { kind: "pixel" as const, value: o.accuracy } : match !== null ? { kind: "shape" as const, value: match } : null;
+    const detail = m === "trace" ? `${o.source.width} × ${o.source.height}${o.source.transparent ? " · transparent" : ""}` : modeInfo(m).ai ? "AI redraw" : "";
+    const next = buildResult(o, { name, mode: m, accuracy, original, detail });
+    setResult(next);
+    setRecent(addRecent({ name, mode: m, svg: o.svg }));
+    return match;
+  }
+
+  async function run({ source = file, m = mode, correction, original = preview }: { source?: File | null; m?: TaskMode; correction?: string; original?: string | null } = {}) {
+    if (!source) return;
+    if (m === "replace" && !text.trim()) { setError("Type the new text first."); return; }
+    if (m === "blend" && !shape) { setError("Add a shape reference first."); return; }
+    controller.current?.abort();
+    const abort = new AbortController();
+    controller.current = abort;
+    const name = baseName(source.name);
     setBusy(true);
+    setBusyMode(m);
     setError(null);
-    setSaveError(null);
-    setOut(null);
-    setFrame(null);
-    setFinal(false);
+    setFrame(original);
     setProgress(2);
+    if (!correction) setVersions([]);
     const start = Date.now();
-    const timer = setInterval(() => setProgress((p) => Math.max(p, Math.min(90, 90 * (1 - Math.exp(-(Date.now() - start) / 25000))))), 300);
+    const pace = m === "trace" ? 400 : 25000;
+    const timer = setInterval(() => setProgress((p) => Math.max(p, Math.min(90, 90 * (1 - Math.exp(-(Date.now() - start) / pace))))), 120);
     try {
       if (m === "trace") {
-        // Exact trace: vectorize the untouched upload, no AI redraw.
-        setAlts([]);
+        // Exact trace: vectorize the untouched upload on this device, no AI.
         setReference(null);
-        await pickVersion(await readAsDataUrl(source), m, null);
+        setRaw(null);
+        const src = await readAsDataUrl(source);
+        abort.signal.throwIfAborted();
+        setProgress(60);
+        await finish(src, m, null, name, original);
         return;
       }
       const form = new FormData();
       const multi = m === "blend" || (correction && raw);
       const key = multi ? "image[]" : "image";
       if (correction && raw) {
-        form.append(key, new File([toFile(raw, "draft.png", "image/png")], "draft.png", { type: "image/png" }));
+        form.append(key, logoFile(raw, "draft.png", "image/png"));
         form.append("fix", correction);
       }
       // Clean logos go to the AI as a crisp 1024px rendering of their exact trace, plus measured geometry.
@@ -125,285 +134,159 @@ function Index() {
       form.append(key, ref.file);
       if (ref.geometry) form.append("geometry", ref.geometry);
       if (ref.traced) form.append("reference", "traced");
-      if (m === "blend" && shape) form.append(key, await onWhite(shape));
+      if (m === "blend" && shape) form.append(key, await flattenLogo(shape));
       form.append("text", text.trim());
       form.append("mode", m);
-      let last = "";
-      if (more) {
+      setProgress((p) => Math.max(p, 12));
+      if (more && !correction) {
         const names = [["gemini", "Gemini"], ["grok", "Grok"]] as const;
-        setAlts([{ name: "OpenAI" }, ...names.map(([, n]) => ({ name: n }))]);
+        setVersions([{ name: "OpenAI" }, ...names.map(([, n]) => ({ name: n }))]);
         names.forEach(([id, n]) => {
           const f = new FormData();
           form.forEach((v, k) => f.append(k, v));
           f.append("provider", id);
           let got = "";
-          streamImage("/api/edit-image", f, (src, fin) => { if (fin) got = src; })
+          streamImage("/api/edit-image", f, (src, fin) => { if (fin) got = src; }, abort.signal)
             .then(async () => {
               const match = got ? shapeMatch(ref, (await toOutputs(got)).signature) : null;
-              setAlts((a) => a.map((x) => (x.name === n ? { name: n, src: got, match } : x)));
+              setVersions((a) => a.map((x) => (x.name === n ? { name: n, src: got, match } : x)));
             })
-            .catch((e) => setAlts((a) => a.map((x) => (x.name === n ? { name: n, err: e instanceof Error ? e.message : "Failed" } : x))));
+            .catch((e: unknown) => setVersions((a) => a.map((x) => (x.name === n ? { name: n, err: e instanceof Error ? e.message : "Failed" } : x))));
         });
-      } else setAlts([]);
+      }
       form.append("provider", "openai");
+      let last = "";
       await streamImage("/api/edit-image", form, (src, isFinal) => {
         setFrame(src);
         setProgress((p) => Math.max(p, isFinal ? 92 : 60));
-        setFinal(isFinal);
         if (isFinal) last = src;
-      });
-      if (last) {
-        const match = await pickVersion(last, m, ref);
-        if (more) setAlts((a) => a.map((x) => (x.name === "OpenAI" ? { name: "OpenAI", src: last, match } : x)));
-      }
+      }, abort.signal);
+      abort.signal.throwIfAborted();
+      if (!last) throw new Error("No logo came back. Please try again.");
+      setRaw(last);
+      setProgress(96);
+      const match = await finish(last, m, ref, name, original);
+      if (more && !correction) setVersions((a) => a.map((x) => (x.name === "OpenAI" ? { name: "OpenAI", src: last, match } : x)));
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Something went wrong");
+      if (abort.signal.aborted) return;
+      setError(e instanceof Error ? e.message : "Something went wrong. Please try again.");
     } finally {
       clearInterval(timer);
-      setBusy(false);
-    }
-  }
-
-  async function pickVersion(last: string, m: TaskMode = mode, ref: PreparedReference | null = reference): Promise<number | null> {
-    {
-      {
-        setFrame(last);
-        setFinal(true);
-        setProgress(95);
-        setRaw(last);
-        setFix("");
-        const o = await toOutputs(last);
-        const slug = m === "recreate" || m === "trace" ? "logo" : text.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "logo";
-        const match = m === "recreate" ? shapeMatch(ref, o.signature) : null;
-        setOut({ ...o, match, pngFile: toFile(o.png, `${slug}.png`, "image/png"), whitePngFile: toFile(o.whitePng, `${slug}-white.png`, "image/png"), svgFile: toFile(o.svg, `${slug}.svg`, "image/svg+xml") });
-        setProgress(100);
-        return match;
+      if (controller.current === abort) {
+        controller.current = null;
+        setBusy(false);
       }
     }
   }
 
+  function cancel() {
+    controller.current?.abort();
+    controller.current = null;
+    setBusy(false);
+  }
 
-  const shown = (background === "white" ? out?.whitePng : out?.png) ?? frame;
-  const scored = alts.map((a) => a.match).filter((v): v is number => typeof v === "number");
-  const bestMatch = scored.length > 1 ? Math.max(...scored) : null;
-  function uploadLogo(f: File) {
-    resetResult();
-    if (preview) URL.revokeObjectURL(preview);
-    setFile(f);
-    setPreview(URL.createObjectURL(f));
-    if (mode === "recreate" || mode === "trace") void run(undefined, mode, f);
+  function startOver() {
+    cancel();
+    setResult(null);
+    setVersions([]);
+    setRaw(null);
+    setError(null);
   }
-  function uploadShape(f: File) {
-    resetResult();
-    if (shapePreview) URL.revokeObjectURL(shapePreview);
-    setShape(f);
-    setShapePreview(URL.createObjectURL(f));
+
+  async function pickVersion(src: string) {
+    if (!result || !file) return;
+    setRaw(src);
+    await finish(src, result.mode, reference, result.name, result.original);
   }
-  const logoDrop = useImageDrop((files) => { const f = files[0]; if (f) uploadLogo(f); }, busy || savingPng || batch);
-  const shapeDrop = useImageDrop((files) => { const f = files[0]; if (f) uploadShape(f); }, busy || savingPng || batch);
+
+  function rerun(next: "trace" | "recreate" | "replace") {
+    setMode(next);
+    if (next === "replace") {
+      // Needs the new wording: back to the start card with the same upload selected.
+      setResult(null);
+      setVersions([]);
+      return;
+    }
+    void run({ m: next });
+  }
+
+  async function openRecent(item: RecentItem) {
+    try {
+      setResult(await resultFromRecent(item));
+      setVersions([]);
+      setRaw(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "That saved logo could not be opened.");
+    }
+  }
+
+  if (busy) {
+    return (
+      <ProcessingScreen
+        name={file?.name ?? "Your logo"}
+        detail={[dims, modeInfo(busyMode).label].filter(Boolean).join(" · ")}
+        image={frame}
+        mode={busyMode}
+        progress={progress}
+        onCancel={cancel}
+      />
+    );
+  }
+
+  if (result && !batch) {
+    return (
+      <ResultWorkspace
+        result={result}
+        versions={versions}
+        onPickVersion={(src) => void pickVersion(src)}
+        onNew={startOver}
+        onRerun={file ? rerun : undefined}
+        onFix={raw && result.mode !== "trace" ? (fix) => void run({ m: result.mode, correction: fix }) : undefined}
+        notice={error}
+      />
+    );
+  }
 
   return (
-    <main className={`mx-auto flex min-h-screen ${batch ? "max-w-5xl" : "max-w-md"} flex-col gap-3 px-4 py-5`}>
-
-      {!batch && <div {...logoDrop.handlers} aria-label="Logo upload area" className={`${background === "transparent" ? "checker" : "bg-background"} ${logoDrop.dragging ? "ring-2 ring-primary" : ""} relative flex ${shown ? "min-h-40" : "aspect-[16/9]"} items-center justify-center overflow-hidden rounded-xl border border-border`}>
-        {shown ? (
-          <img
-            src={shown}
-            alt="New logo"
-            className={`block h-auto max-h-[60vh] w-auto max-w-full object-contain px-3 pt-3 pb-[4.5rem] transition-[filter] ${final ? "blur-0" : "blur-xl"}`}
-          />
-        ) : (
-          <span className="text-sm text-muted-foreground">Your new logo appears here</span>
-        )}
-        <label className="absolute bottom-2 left-2 flex h-14 w-14 cursor-pointer items-center justify-center overflow-hidden rounded-lg border-2 border-background bg-muted shadow">
-          {preview ? (
-            <img src={preview} alt="Original logo" className="h-full w-full object-cover" />
-          ) : (
-            <ImageIcon className="h-6 w-6 text-muted-foreground" aria-hidden="true" />
-          )}
-          <input
-            type="file"
-            accept="image/*"
-            aria-label="Upload original logo"
-            disabled={busy || savingPng}
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) uploadLogo(f);
-              e.target.value = "";
-            }}
-          />
-        </label>
-        {mode === "blend" && (
-          <label {...shapeDrop.handlers} aria-label="Shape upload area" className={`${shapeDrop.dragging ? "ring-2 ring-primary" : ""} absolute bottom-2 left-[4.5rem] flex h-14 w-14 cursor-pointer items-center justify-center overflow-hidden rounded-lg border-2 border-background bg-muted shadow`}>
-            {shapePreview ? (
-              <img src={shapePreview} alt="Shape reference" className="h-full w-full object-cover" />
-            ) : (
-              <span className="text-center text-[10px] font-bold leading-tight text-muted-foreground">+ Shape</span>
-            )}
-            <input
-              type="file"
-              accept="image/*"
-              aria-label="Upload shape reference"
-              disabled={busy || savingPng}
-              className="hidden"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) uploadShape(f);
-                e.target.value = "";
-              }}
-            />
-          </label>
-        )}
-      </div>}
-
-      <ToggleGroup type="single" value={mode} onValueChange={(value) => {
-        if (!batch && !value && (mode === "recreate" || mode === "trace") && file) { void run(undefined, mode); return; }
-        if (value === "replace" || value === "recreate" || value === "blend" || value === "trace") {
-          setMode(value);
-          resetResult();
-          if (!batch && (value === "recreate" || value === "trace") && file) void run(undefined, value);
-        }
-      }} disabled={busy || savingPng} aria-label="Logo mode" className="grid grid-cols-4">
-        <ToggleGroupItem value="replace" className="h-10 border border-border text-xs">Change text</ToggleGroupItem>
-        <ToggleGroupItem value="recreate" className="h-10 border border-border text-xs">Recreate</ToggleGroupItem>
-        <ToggleGroupItem value="blend" className="h-10 border border-border text-xs">New shape</ToggleGroupItem>
-        <ToggleGroupItem value="trace" className="h-10 border border-border text-xs">Exact trace</ToggleGroupItem>
-      </ToggleGroup>
-      <label className="flex items-center justify-between gap-3 text-xs font-bold"><span>Batch upload</span><Switch checked={batch} onCheckedChange={setBatch} disabled={busy || savingPng} aria-label="Batch upload" /></label>
-      <div className={batch ? "flex flex-col gap-3" : "hidden"}><BatchLogos mode={mode} /></div>
-      {!batch && file && (<>
-      {mode === "blend" && (
-        <p className="text-xs text-muted-foreground">Add a second image (e.g. a music note). Your logo's style gets reshaped to look like it.</p>
-      )}
-      {mode === "trace" && (
-        <p className="text-xs text-muted-foreground">Vectorizes your upload exactly as it is, with no AI redraw. Best for clean logo files.</p>
-      )}
-      {mode !== "trace" && <label className="flex items-center justify-between gap-3 text-xs font-bold">
-        <span>{more ? "3 versions: OpenAI + Gemini + Grok" : "Get 3 versions (OpenAI + Gemini + Grok)"}</span>
-        <Switch checked={more} onCheckedChange={setMore} disabled={busy} aria-label="Get 3 versions" />
-      </label>}
-      {alts.length > 0 && (
-        <div className="grid grid-cols-3 gap-2">
-          {alts.map((a) => (
-            <button
-              key={a.name}
-              type="button"
-              disabled={!a.src || busy}
-              onClick={() => a.src && pickVersion(a.src)}
-              className={`flex flex-col items-center gap-1 rounded-lg border p-1 text-[10px] ${a.src && raw === a.src ? "border-primary" : "border-border"}`}
-            >
-              <div className="flex aspect-square w-full items-center justify-center overflow-hidden rounded bg-background">
-                {a.src ? <img src={a.src} alt={`${a.name} version`} className="max-h-full max-w-full object-contain" /> : <span className="px-1 text-center text-muted-foreground">{a.err ? "Failed" : "Working…"}</span>}
-              </div>
-              <span className="font-bold">{a.name}</span>
-              {a.match != null && (
-                <span className={a.match === bestMatch ? "font-bold text-primary" : "text-muted-foreground"}>
-                  {Math.round(a.match * 100)}% match{a.match === bestMatch ? " · best" : ""}
-                </span>
-              )}
-              {a.err && <span className="line-clamp-2 text-destructive" title={a.err}>{a.err}</span>}
-            </button>
-          ))}
-        </div>
-      )}
-
-      <div className="flex items-center gap-2">
-        <span className="text-xs text-muted-foreground">PNG background</span>
-        <ToggleGroup type="single" value={background} onValueChange={(value) => {
-          if (value) { setBackground(value); setSaveError(null); }
-        }} disabled={savingPng} aria-label="PNG background" className="flex-1">
-          <ToggleGroupItem value="transparent" className="flex-1 text-xs">Transparent</ToggleGroupItem>
-          <ToggleGroupItem value="white" className="flex-1 text-xs">White</ToggleGroupItem>
-        </ToggleGroup>
-      </div>
-
-      {(mode === "replace" || mode === "blend") && (
-      <div className="flex gap-2">
-        <input
-          value={text}
-          disabled={busy || savingPng}
-          onChange={(e) => { setText(e.target.value); resetResult(); }}
-          aria-label="New text"
-          placeholder={mode === "blend" ? "Direction (optional) e.g. make each half a note" : "New text"}
-          className="h-12 min-w-0 flex-1 rounded-xl border border-input bg-background px-3 text-base outline-none focus:border-foreground"
-        />
-        <Button
-          onClick={() => run()}
-          disabled={!file || (mode === "replace" && !text.trim()) || (mode === "blend" && !shape) || busy || savingPng}
-          className="h-12 rounded-xl px-5 font-bold disabled:opacity-40"
+    <div className="flex min-h-dvh flex-col bg-dots">
+      <header className="flex flex-wrap items-center justify-between gap-3 px-4 py-4 sm:px-7">
+        <button type="button" onClick={() => setBatch(false)} className="flex items-center gap-2.5 text-foreground" aria-label="Vectorthis home">
+          <BrandMark />
+          <span className="text-[17px] font-semibold tracking-[-0.01em]">Vectorthis</span>
+        </button>
+        <button
+          type="button"
+          aria-pressed={batch}
+          onClick={() => setBatch((b) => !b)}
+          className="inline-flex h-11 items-center gap-2 rounded-xl border border-border bg-card px-3.5 text-sm font-medium"
         >
-          {busy ? `${Math.round(progress)}%` : mode === "blend" ? "Reshape logo" : "Create"}
-        </Button>
-      </div>
+          <LayoutGrid className="h-4 w-4" aria-hidden="true" />
+          {batch ? "Single logo" : "Batch"}
+        </button>
+      </header>
+      {batch ? (
+        <BatchLogos mode={mode} onMode={setMode} />
+      ) : (
+        <StartScreen
+          mode={mode}
+          onMode={(m) => { setMode(m); setError(null); }}
+          file={file}
+          preview={preview}
+          onFile={chooseFile}
+          text={text}
+          onText={setText}
+          shape={shape}
+          shapePreview={shapePreview}
+          onShape={chooseShape}
+          more={more}
+          onMore={setMore}
+          canRun={Boolean(file) && (mode !== "replace" || Boolean(text.trim())) && (mode !== "blend" || Boolean(shape))}
+          onRun={() => void run()}
+          error={error}
+          recent={recent}
+          onOpenRecent={(item) => void openRecent(item)}
+        />
       )}
-      </>)}
-
-      {!batch && busy && (
-        <div className="flex flex-col gap-1">
-          <div className="h-2 overflow-hidden rounded-full bg-muted">
-            <div className="h-full rounded-full bg-primary transition-[width] duration-300" style={{ width: `${progress}%` }} />
-          </div>
-          <p className="text-xs text-muted-foreground">
-            {progress < 60 ? "Reading your logo…" : progress < 92 ? (mode === "recreate" || mode === "trace" ? "Recreating your logo…" : "Drawing new text…") : "Preparing files…"} {Math.round(progress)}%
-          </p>
-        </div>
-      )}
-
-      {!batch && error && <p className="text-sm text-destructive">{error}</p>}
-
-      {!batch && out && (
-        <div className="grid grid-cols-2 gap-2">
-          <Button
-            onClick={() => {
-              if (savingPng) return;
-              // Start native sharing synchronously, while this tap is active.
-              const share = savePng(background === "white" ? out.whitePngFile : out.pngFile);
-              setSavingPng(true);
-              setSaveError(null);
-              share.catch((e: unknown) => {
-                setSaveError(e instanceof Error ? e.message : "Image sharing could not open. Your logo is still here.");
-              }).finally(() => setSavingPng(false));
-            }}
-            disabled={savingPng}
-            className="h-12 whitespace-normal rounded-xl px-2 font-bold"
-          >
-             {savingPng ? (mobileSave ? "Opening save options…" : "Downloading…") : (mobileSave ? "Save PNG to Photos" : "Download PNG")}
-          </Button>
-          <Button
-            onClick={() => saveSvg(out.svgFile)}
-            variant="outline"
-            className="h-12 rounded-xl border-2 border-foreground font-bold"
-          >
-            {mobileSave ? "Save SVG" : "Download SVG"}
-          </Button>
-        </div>
-      )}
-      {!batch && saveError && <p role="alert" className="text-sm text-destructive">{saveError}</p>}
-      {!batch && out && out.match != null && (
-        <p className="text-xs text-muted-foreground" aria-label="Shape match">
-          Shape match with your original: <span className={`font-bold ${out.match >= 0.95 ? "text-foreground" : "text-destructive"}`}>{Math.round(out.match * 100)}%</span>
-          {out.match < 0.95 && " — the AI drifted. Try again, compare 3 versions, or use Exact trace for a pixel-exact copy."}
-        </p>
-      )}
-      {!batch && out && !busy && mode !== "trace" && (
-        <div className="flex gap-2">
-          <input
-            value={fix}
-            onChange={(e) => setFix(e.target.value)}
-            placeholder="Fix something? e.g. make the R wavier"
-            className="h-12 min-w-0 flex-1 rounded-xl border border-input bg-background px-3 text-base outline-none focus:border-foreground"
-          />
-           <Button
-            onClick={() => run(fix.trim())}
-             disabled={!fix.trim() || savingPng}
-             variant="outline"
-            className="h-12 rounded-xl border-2 border-foreground px-4 font-bold disabled:opacity-40"
-          >
-            Fix
-           </Button>
-        </div>
-      )}
-    </main>
+    </div>
   );
 }

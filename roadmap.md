@@ -8,3 +8,4 @@
 - [x] Add Exact trace mode (no AI) and make the tracer handle any ink colour or transparent backgrounds, straight edges, and rounded corners; the Greek-key mark traces as 13 axis-aligned lines + 2 arcs with 0.17% mean pixel error.
 - [x] Improve AI redraw fidelity: traced 1024px reference, measured geometry lock in the prompt, shape fidelity rules, and a shape-match score (old drifted Greek-key redraw scores 89%, exact copy 100%) with best-of-3 highlighting.
 - [x] Round corners as true circular arcs (matched radii), keep big letter curves free of fake straight segments, and smooth line-to-curve transitions.
+- [x] Rebuild the UI to the approved redesign: dotted start card with mode cards, step-by-step processing, result workspace (Artwork / Outlines / Compare / Code, background, zoom, accuracy + stats, SVG/PNG export with sizes), mobile save sheet, batch with download-all, recent logos on device; Exact trace is the default.
