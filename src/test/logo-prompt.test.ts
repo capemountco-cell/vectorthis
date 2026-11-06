@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildLogoPrompt, SHAPE_BRIEF_INSTRUCTIONS, TIGHT_NESTING } from "@/lib/logo-prompt";
+import { ARTWORK_FIDELITY, buildLogoPrompt, SHAPE_BRIEF_INSTRUCTIONS, SHAPE_FIDELITY, TIGHT_NESTING } from "@/lib/logo-prompt";
 
 describe("Logo recreation requirements", () => {
   it("recreates original lettering and artwork without replacement text", () => {
@@ -59,5 +59,38 @@ describe("Shape hybrid", () => {
     expect(TIGHT_NESTING).toContain("never wider than the narrowest gap in the original");
     expect(TIGHT_NESTING).toContain("must never touch or merge");
     expect(prompt).toContain("move them closer until only one narrow, even channel separates them");
+  });
+});
+
+describe("Redraw fidelity", () => {
+  const geometry = "Overall width:height = 1.01. Only 2 rounded corners: top-left; top-right.";
+  it("locks recreate to the measured geometry and re-checks it", () => {
+    const prompt = buildLogoPrompt("", "", "recreate", "", { geometry, tracedReference: true });
+    expect(prompt).toContain(SHAPE_FIDELITY);
+    expect(prompt).toContain(`GEOMETRY LOCK (measured from a precise vector trace of the original; the result must match every point): ${geometry}`);
+    expect(prompt).toContain("Re-check every GEOMETRY LOCK fact");
+    expect(prompt).toContain("Image 1 is a clean, high-resolution black rendering of the original logo");
+  });
+  it("points the traced-reference note at the original, which is Image 2 during corrections", () => {
+    const prompt = buildLogoPrompt("", "straighten the edge", "recreate", "", { geometry, tracedReference: true });
+    expect(prompt).toContain("Image 2 is a clean, high-resolution black rendering");
+    expect(prompt).toContain("GEOMETRY LOCK");
+  });
+  it("keeps icons exact in change-text mode without locking the new wordmark's proportions", () => {
+    const prompt = buildLogoPrompt("Acme", "", "replace", "", { geometry });
+    expect(prompt).toContain(ARTWORK_FIDELITY);
+    expect(prompt).not.toContain("GEOMETRY LOCK");
+    expect(prompt).not.toContain(SHAPE_FIDELITY);
+  });
+  it("leaves shape hybrids free to reshape", () => {
+    const prompt = buildLogoPrompt("", "", "blend", "brief", { geometry });
+    expect(prompt).not.toContain("GEOMETRY LOCK");
+    expect(prompt).not.toContain(SHAPE_FIDELITY);
+  });
+  it("caps client-supplied geometry and omits notes it wasn't given", () => {
+    const prompt = buildLogoPrompt("", "", "recreate", "", { geometry: "x ".repeat(5000) });
+    expect(prompt.length).toBeLessThan(buildLogoPrompt("", "", "recreate").length + 1800);
+    expect(buildLogoPrompt("", "", "recreate")).not.toContain("REFERENCE QUALITY");
+    expect(buildLogoPrompt("", "", "recreate")).not.toContain("\n\n\n");
   });
 });

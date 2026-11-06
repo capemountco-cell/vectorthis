@@ -5,10 +5,11 @@ import { executeLogoTask, type TaskOptions } from "@/lib/logo-task";
 import { flattenLogo, logoFile, saveLogoSvg } from "@/lib/logo-files";
 import { streamImage } from "@/lib/stream-image";
 import { toOutputs } from "@/lib/logo-convert";
+import { prepareReference, shapeMatch } from "@/lib/reference-prep";
 import { savePng } from "@/lib/save-png";
 
 export type BatchJob = { id: string; file: File; options: TaskOptions | null };
-type Output = Awaited<ReturnType<typeof toOutputs>> & { pngFile: File; whiteFile: File; svgFile: File };
+type Output = Awaited<ReturnType<typeof toOutputs>> & { pngFile: File; whiteFile: File; svgFile: File; match: number | null };
 
 export function BatchLogoTask({ job, background, onRemove }: { job: BatchJob; background: string; onRemove: () => void }) {
   const [preview, setPreview] = useState("");
@@ -36,12 +37,18 @@ export function BatchLogoTask({ job, background, onRemove }: { job: BatchJob; ba
       setFrame(src); setProgress((p) => Math.max(p, final ? 92 : 60));
       if (final) setStatus("Preparing files");
     }, {
-      flatten: flattenLogo,
+      // The original goes as a clean traced rendering when possible; the shape reference is just flattened.
+      flatten: async (f) => (f === job.file ? (await prepareReference(f)).file : flattenLogo(f)),
+      describe: async (f) => {
+        const ref = await prepareReference(f);
+        return { geometry: ref.geometry, traced: ref.traced };
+      },
       stream: (form, frameCallback, signal) => streamImage("/api/edit-image", form, frameCallback, signal),
       prepare: async (src) => {
         const converted = await toOutputs(src);
+        const match = job.options?.mode === "recreate" ? shapeMatch(await prepareReference(job.file), converted.signature) : null;
         const name = job.file.name.replace(/\.[^.]+$/, "") || "logo";
-        return { ...converted, pngFile: logoFile(converted.png, `${name}.png`, "image/png"), whiteFile: logoFile(converted.whitePng, `${name}-white.png`, "image/png"), svgFile: logoFile(converted.svg, `${name}.svg`, "image/svg+xml") };
+        return { ...converted, match, pngFile: logoFile(converted.png, `${name}.png`, "image/png"), whiteFile: logoFile(converted.whitePng, `${name}-white.png`, "image/png"), svgFile: logoFile(converted.svg, `${name}.svg`, "image/svg+xml") };
       },
     }).then((result) => {
       if (abort.signal.aborted) return;
@@ -62,7 +69,7 @@ export function BatchLogoTask({ job, background, onRemove }: { job: BatchJob; ba
       </div>
       <div className="flex flex-col gap-2 p-2">
         <p className="truncate text-xs font-medium" title={job.file.name}>{job.file.name}</p>
-        <div className="flex items-center justify-between gap-1 text-[10px] text-muted-foreground"><span className="capitalize">{job.options?.provider ?? "Pending"}</span><span role="status">{running ? `${Math.round(progress)}%` : status}</span></div>
+        <div className="flex items-center justify-between gap-1 text-[10px] text-muted-foreground"><span className="capitalize">{job.options ? (job.options.mode === "trace" ? "Exact trace" : job.options.provider) : "Pending"}</span><span role="status">{running ? `${Math.round(progress)}%` : output?.match != null ? `${status} · ${Math.round(output.match * 100)}% match` : status}</span></div>
         <div role="progressbar" aria-label={`${job.file.name} progress`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress)} className="h-1 overflow-hidden rounded-full bg-muted"><div className="h-full bg-primary transition-[width] motion-reduce:transition-none" style={{ width: `${progress}%` }} /></div>
         {status === "Failed" && <Button variant="outline" size="sm" onClick={() => setAttempt((a) => a + 1)}><RotateCcw className="h-3 w-3" />Retry</Button>}
         {output && <div className="grid grid-cols-2 gap-1">

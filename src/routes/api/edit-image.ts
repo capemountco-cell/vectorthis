@@ -22,6 +22,11 @@ export const Route = createFileRoute("/api/edit-image")({
         form.delete("text");
         const fix = String(form.get("fix") ?? "").trim();
         form.delete("fix");
+        // Client-side trace of the original: measured geometry and whether a clean rendering was sent.
+        const geometry = String(form.get("geometry") ?? "");
+        const tracedReference = form.get("reference") === "traced";
+        form.delete("geometry");
+        form.delete("reference");
         const images = [...form.entries()].filter(([name, value]) =>
           (name === "image" || name === "image[]") && value instanceof File,
         );
@@ -44,7 +49,7 @@ export const Route = createFileRoute("/api/edit-image")({
             return new Response("Couldn't read the shape image. Please try again.", { status: 502 });
           }
         }
-        form.set("prompt", buildLogoPrompt(mode === "blend" ? "" : text, fix, mode, brief));
+        form.set("prompt", buildLogoPrompt(mode === "blend" ? "" : text, fix, mode, brief, { geometry, tracedReference }));
         if (provider !== "openai") {
           const files = [...form.entries()].filter(([n, v]) => (n === "image" || n === "image[]") && v instanceof File).map(([, v]) => v as File);
           return provider === "gemini" ? geminiEdit(String(form.get("prompt")), files) : grokEdit(String(form.get("prompt")), files);
