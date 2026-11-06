@@ -10,7 +10,7 @@ import { StartScreen } from "@/components/app/start-screen";
 import { toOutputs } from "@/lib/logo-convert";
 import { flattenLogo, logoFile } from "@/lib/logo-files";
 import { DEFAULT_TASK_MODE, readAsDataUrl, type TaskMode } from "@/lib/logo-task";
-import { addRecent, loadRecent, type RecentItem } from "@/lib/recent";
+import { addRecent, clearRecent, loadRecent, removeRecent, type RecentItem } from "@/lib/recent";
 import { prepareReference, shapeMatch, type PreparedReference } from "@/lib/reference-prep";
 import { buildResult, resultFromRecent, type LogoResult } from "@/lib/result-model";
 import { streamImage } from "@/lib/stream-image";
@@ -285,6 +285,8 @@ function Index() {
           error={error}
           recent={recent}
           onOpenRecent={(item) => void openRecent(item)}
+          onDeleteRecent={(item) => setRecent((list) => removeRecent(item.id, list))}
+          onClearRecent={() => setRecent(clearRecent())}
         />
       )}
     </div>
