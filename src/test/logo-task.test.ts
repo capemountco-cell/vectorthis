@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_LOGO_MODE, executeLogoTask, type LogoTaskDependencies } from "@/lib/logo-task";
+import { DEFAULT_LOGO_MODE, DEFAULT_TASK_MODE, executeLogoTask, type LogoTaskDependencies } from "@/lib/logo-task";
 
 const options = { mode: DEFAULT_LOGO_MODE, text: "", shape: null, provider: "openai" as const };
 const file = (name: string) => new File([name], name, { type: "image/png" });
 
 describe("Independent logo tasks", () => {
-  it("defaults to recreate without replacement text", async () => {
+  it("starts the app on exact trace and keeps recreate as the default AI mode", async () => {
+    expect(DEFAULT_TASK_MODE).toBe("trace");
     expect(DEFAULT_LOGO_MODE).toBe("recreate");
     const stream = vi.fn(async (form: FormData, frame: (src: string, final: boolean) => void) => {
       expect(form.get("mode")).toBe("recreate");

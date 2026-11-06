@@ -1,8 +1,11 @@
 import type { LogoMode } from "@/lib/logo-prompt";
 
+/** Default AI mode. */
 export const DEFAULT_LOGO_MODE: LogoMode = "recreate";
 /** "trace" vectorizes the upload itself in the browser: no AI, so the geometry is exact. */
 export type TaskMode = LogoMode | "trace";
+/** What the app starts on: exact, instant and free, so it suits most clean logo files. */
+export const DEFAULT_TASK_MODE: TaskMode = "trace";
 export type TaskOptions = {
   mode: TaskMode;
   text: string;
