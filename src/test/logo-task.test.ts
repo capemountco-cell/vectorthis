@@ -15,6 +15,19 @@ describe("Independent logo tasks", () => {
     expect(await executeLogoTask(file("a"), options, new AbortController().signal, () => {}, { flatten: async (f) => f, stream, prepare: async (src) => src })).toBe("logo");
   });
 
+  it("traces the untouched upload without flattening or calling the AI", async () => {
+    const stream = vi.fn();
+    const flatten = vi.fn(async (f: File) => f);
+    const frames: string[] = [];
+    const result = await executeLogoTask(file("mark.png"), { ...options, mode: "trace" }, new AbortController().signal, (src) => frames.push(src), {
+      flatten, stream, prepare: async (src) => `svg:${src}`, read: async (f) => `pixels:${f.name}`,
+    });
+    expect(result).toBe("svg:pixels:mark.png");
+    expect(frames).toEqual(["pixels:mark.png"]);
+    expect(stream).not.toHaveBeenCalled();
+    expect(flatten).not.toHaveBeenCalled();
+  });
+
   it("starts every task concurrently without an app-imposed count limit and preserves out-of-order results", async () => {
     const finish: Array<() => void> = [];
     const dependencies: LogoTaskDependencies<string> = {

@@ -7,8 +7,7 @@ import { toOutputs } from "@/lib/logo-convert";
 import { downloadFile, isMobileSaveDevice, savePng } from "@/lib/save-png";
 import { Button } from "@/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import type { LogoMode } from "@/lib/logo-prompt";
-import { DEFAULT_LOGO_MODE } from "@/lib/logo-task";
+import { DEFAULT_LOGO_MODE, readAsDataUrl, type TaskMode } from "@/lib/logo-task";
 import { BatchLogos } from "@/components/batch-logos";
 import { useImageDrop } from "@/hooks/use-image-drop";
 
@@ -63,7 +62,7 @@ function Index() {
   const [shape, setShape] = useState<File | null>(null);
   const [shapePreview, setShapePreview] = useState<string | null>(null);
   const [text, setText] = useState("");
-  const [mode, setMode] = useState<LogoMode>(DEFAULT_LOGO_MODE);
+  const [mode, setMode] = useState<TaskMode>(DEFAULT_LOGO_MODE);
   const [batch, setBatch] = useState(false);
   const [background, setBackground] = useState("transparent");
   const [frame, setFrame] = useState<string | null>(null);
@@ -92,7 +91,7 @@ function Index() {
     setSaveError(null);
   }
 
-  async function run(correction?: string, m: LogoMode = mode, source: File | null = file) {
+  async function run(correction?: string, m: TaskMode = mode, source: File | null = file) {
     if (!source || (m === "replace" && !text.trim()) || (m === "blend" && !shape)) return;
     setBusy(true);
     setError(null);
@@ -104,6 +103,12 @@ function Index() {
     const start = Date.now();
     const timer = setInterval(() => setProgress((p) => Math.max(p, Math.min(90, 90 * (1 - Math.exp(-(Date.now() - start) / 25000))))), 300);
     try {
+      if (m === "trace") {
+        // Exact trace: vectorize the untouched upload, no AI redraw.
+        setAlts([]);
+        await pickVersion(await readAsDataUrl(source), m);
+        return;
+      }
       const form = new FormData();
       const multi = m === "blend" || (correction && raw);
       const key = multi ? "image[]" : "image";
@@ -148,7 +153,7 @@ function Index() {
     }
   }
 
-  async function pickVersion(last: string) {
+  async function pickVersion(last: string, m: TaskMode = mode) {
     {
       {
         setFrame(last);
@@ -157,7 +162,7 @@ function Index() {
         setRaw(last);
         setFix("");
         const o = await toOutputs(last);
-        const slug = mode === "recreate" ? "logo" : text.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "logo";
+        const slug = m === "recreate" || m === "trace" ? "logo" : text.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "logo";
         setOut({ ...o, pngFile: toFile(o.png, `${slug}.png`, "image/png"), whitePngFile: toFile(o.whitePng, `${slug}-white.png`, "image/png"), svgFile: toFile(o.svg, `${slug}.svg`, "image/svg+xml") });
         setProgress(100);
       }
@@ -171,7 +176,7 @@ function Index() {
     if (preview) URL.revokeObjectURL(preview);
     setFile(f);
     setPreview(URL.createObjectURL(f));
-    if (mode === "recreate") void run(undefined, "recreate", f);
+    if (mode === "recreate" || mode === "trace") void run(undefined, mode, f);
   }
   function uploadShape(f: File) {
     resetResult();
@@ -238,16 +243,17 @@ function Index() {
       </div>}
 
       <ToggleGroup type="single" value={mode} onValueChange={(value) => {
-        if (!batch && !value && mode === "recreate" && file) { void run(undefined, "recreate"); return; }
-        if (value === "replace" || value === "recreate" || value === "blend") {
+        if (!batch && !value && (mode === "recreate" || mode === "trace") && file) { void run(undefined, mode); return; }
+        if (value === "replace" || value === "recreate" || value === "blend" || value === "trace") {
           setMode(value);
           resetResult();
-          if (!batch && value === "recreate" && file) void run(undefined, "recreate");
+          if (!batch && (value === "recreate" || value === "trace") && file) void run(undefined, value);
         }
-      }} disabled={busy || savingPng} aria-label="Logo mode" className="grid grid-cols-3">
+      }} disabled={busy || savingPng} aria-label="Logo mode" className="grid grid-cols-4">
         <ToggleGroupItem value="replace" className="h-10 border border-border text-xs">Change text</ToggleGroupItem>
         <ToggleGroupItem value="recreate" className="h-10 border border-border text-xs">Recreate</ToggleGroupItem>
         <ToggleGroupItem value="blend" className="h-10 border border-border text-xs">New shape</ToggleGroupItem>
+        <ToggleGroupItem value="trace" className="h-10 border border-border text-xs">Exact trace</ToggleGroupItem>
       </ToggleGroup>
       <label className="flex items-center justify-between gap-3 text-xs font-bold"><span>Batch upload</span><Switch checked={batch} onCheckedChange={setBatch} disabled={busy || savingPng} aria-label="Batch upload" /></label>
       <div className={batch ? "flex flex-col gap-3" : "hidden"}><BatchLogos mode={mode} /></div>
@@ -255,10 +261,13 @@ function Index() {
       {mode === "blend" && (
         <p className="text-xs text-muted-foreground">Add a second image (e.g. a music note). Your logo's style gets reshaped to look like it.</p>
       )}
-      <label className="flex items-center justify-between gap-3 text-xs font-bold">
+      {mode === "trace" && (
+        <p className="text-xs text-muted-foreground">Vectorizes your upload exactly as it is, with no AI redraw. Best for clean logo files.</p>
+      )}
+      {mode !== "trace" && <label className="flex items-center justify-between gap-3 text-xs font-bold">
         <span>{more ? "3 versions: OpenAI + Gemini + Grok" : "Get 3 versions (OpenAI + Gemini + Grok)"}</span>
         <Switch checked={more} onCheckedChange={setMore} disabled={busy} aria-label="Get 3 versions" />
-      </label>
+      </label>}
       {alts.length > 0 && (
         <div className="grid grid-cols-3 gap-2">
           {alts.map((a) => (
@@ -289,7 +298,7 @@ function Index() {
         </ToggleGroup>
       </div>
 
-      {mode !== "recreate" && (
+      {(mode === "replace" || mode === "blend") && (
       <div className="flex gap-2">
         <input
           value={text}
@@ -316,7 +325,7 @@ function Index() {
             <div className="h-full rounded-full bg-primary transition-[width] duration-300" style={{ width: `${progress}%` }} />
           </div>
           <p className="text-xs text-muted-foreground">
-            {progress < 60 ? "Reading your logo…" : progress < 92 ? (mode === "recreate" ? "Recreating your logo…" : "Drawing new text…") : "Preparing files…"} {Math.round(progress)}%
+            {progress < 60 ? "Reading your logo…" : progress < 92 ? (mode === "recreate" || mode === "trace" ? "Recreating your logo…" : "Drawing new text…") : "Preparing files…"} {Math.round(progress)}%
           </p>
         </div>
       )}
@@ -351,7 +360,7 @@ function Index() {
         </div>
       )}
       {!batch && saveError && <p role="alert" className="text-sm text-destructive">{saveError}</p>}
-      {!batch && out && !busy && (
+      {!batch && out && !busy && mode !== "trace" && (
         <div className="flex gap-2">
           <input
             value={fix}

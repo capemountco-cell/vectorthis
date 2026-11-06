@@ -70,17 +70,54 @@ export function blurCoverage(src: Float32Array, width: number, height: number, s
   return out;
 }
 
-/** Darkness (0 = paper, 1 = ink) per pixel from RGBA, composited on white. */
+/**
+ * Ink coverage per pixel (0 = background, 1 = ink) for any single-colour logo:
+ * black on white, beige on transparent, white on navy, etc.
+ * - Transparent background: coverage is the alpha channel.
+ * - Opaque background: the background colour is taken from the border, the ink
+ *   colour from the pixels furthest from it, and coverage is the position of
+ *   each pixel between the two (so antialiased edges keep their sub-pixel info).
+ */
 export function coverageFromRgba(rgba: Uint8ClampedArray, width: number, height: number) {
-  const out = new Float32Array(width * height);
-  for (let i = 0; i < out.length; i++) {
-    const a = (rgba[i * 4 + 3] ?? 255) / 255;
-    const lum =
-      0.299 * (rgba[i * 4] ?? 255) +
-      0.587 * (rgba[i * 4 + 1] ?? 255) +
-      0.114 * (rgba[i * 4 + 2] ?? 255);
-    out[i] = (1 - lum / 255) * a;
+  const n = width * height;
+  const out = new Float32Array(n);
+  let clear = 0;
+  for (let i = 0; i < n; i++) if ((rgba[i * 4 + 3] ?? 255) < 128) clear++;
+  if (clear > n * 0.02) {
+    for (let i = 0; i < n; i++) out[i] = (rgba[i * 4 + 3] ?? 255) / 255;
+    return out;
   }
+  // Background: per-channel median of the border pixels.
+  const border: number[][] = [[], [], []];
+  const pushPx = (x: number, y: number) => {
+    const i = (y * width + x) * 4;
+    for (let c = 0; c < 3; c++) border[c]!.push(rgba[i + c] ?? 255);
+  };
+  for (let x = 0; x < width; x++) {
+    pushPx(x, 0);
+    pushPx(x, height - 1);
+  }
+  for (let y = 1; y < height - 1; y++) {
+    pushPx(0, y);
+    pushPx(width - 1, y);
+  }
+  const median = (v: number[]) => v.sort((p, q) => p - q)[v.length >> 1] ?? 255;
+  const bg = border.map(median) as [number, number, number];
+  const dist = new Float32Array(n);
+  let max = 0;
+  for (let i = 0; i < n; i++) {
+    const dr = (rgba[i * 4] ?? 255) - bg[0],
+      dg = (rgba[i * 4 + 1] ?? 255) - bg[1],
+      db = (rgba[i * 4 + 2] ?? 255) - bg[2];
+    dist[i] = Math.sqrt(dr * dr + dg * dg + db * db);
+    if (dist[i]! > max) max = dist[i]!;
+  }
+  if (max < 8) return out; // blank image
+  // Ink strength: median distance of clearly-inked pixels (robust to a few outliers).
+  const strong: number[] = [];
+  for (let i = 0; i < n; i++) if (dist[i]! > max * 0.6) strong.push(dist[i]!);
+  const ink = median(strong) || max;
+  for (let i = 0; i < n; i++) out[i] = Math.min(1, dist[i]! / ink);
   return out;
 }
 
@@ -522,13 +559,135 @@ function lineFits(points: Point[], tol: number) {
   return true;
 }
 
-function fitRun(points: Point[], tol: number, out: Segment[], t1?: Point, t2?: Point) {
-  if (points.length < 2) return;
-  if (points.length === 2 || (!t1 && lineFits(points, tol * 0.75))) {
-    out.push({ type: "L", to: points[points.length - 1]! });
+/** Perpendicular distance of p from the infinite line through c with unit direction d. */
+const lineDist = (p: Point, c: Point, d: Point) => Math.abs(d.x * (p.y - c.y) - d.y * (p.x - c.x));
+const project = (p: Point, c: Point, d: Point) => add(c, mul(d, dot(sub(p, c), d)));
+
+/**
+ * Finds genuinely straight stretches inside a run: long enough, within tolerance,
+ * and without the systematic bow an arc has (so big curves stay curves).
+ */
+function findLineSpans(points: Point[], tol: number, minLen: number) {
+  const n = points.length;
+  const reach = new Int32Array(n);
+  for (let i = 0; i < n; i++) {
+    let j = i + 1;
+    for (; j < n; j++) {
+      const a = points[i]!,
+        b = points[j]!,
+        d = sub(b, a),
+        l = len(d);
+      if (l < 1e-9) continue;
+      let ok = true;
+      for (let k = i + 1; k < j && ok; k++)
+        if (Math.abs(d.x * (points[k]!.y - a.y) - d.y * (points[k]!.x - a.x)) / l > tol) ok = false;
+      if (!ok) break;
+    }
+    reach[i] = j - 1;
+  }
+  const candidates: { i: number; j: number; length: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    const j = reach[i]!;
+    const length = len(sub(points[j]!, points[i]!));
+    if (j > i && length >= minLen && (i === 0 || reach[i - 1]! < j))
+      candidates.push({ i, j, length });
+  }
+  candidates.sort((p, q) => q.length - p.length);
+  const taken = new Uint8Array(n);
+  const spans: { i: number; j: number; c: Point; d: Point }[] = [];
+  for (const cand of candidates) {
+    let { i, j } = cand;
+    while (i < j && taken[i]) i++;
+    while (j > i && taken[j]) j--;
+    // Allow touching at a shared endpoint only.
+    if (j <= i || len(sub(points[j]!, points[i]!)) < minLen) continue;
+    let clash = false;
+    for (let k = i + 1; k < j; k++) if (taken[k]) clash = true;
+    if (clash) continue;
+    const pts = points.slice(i, j + 1);
+    const { c, d: dir } = fitLine(pts);
+    const d = dot(dir, sub(points[j]!, points[i]!)) < 0 ? mul(dir, -1) : dir;
+    // Bow test: an arc's middle sits on the opposite side of the fitted line from its ends.
+    const signed = (p: Point) => d.x * (p.y - c.y) - d.y * (p.x - c.x);
+    const third = Math.max(1, Math.floor(pts.length / 3));
+    let mid = 0,
+      ends = 0;
+    for (let k = 0; k < pts.length; k++) {
+      if (k >= third && k < pts.length - third)
+        mid += signed(pts[k]!) / Math.max(1, pts.length - 2 * third);
+      else ends += signed(pts[k]!) / (2 * third);
+    }
+    if (Math.abs(mid - ends) > Math.max(0.06, tol * 0.2)) continue;
+    for (let k = i + 1; k < j; k++) taken[k] = 1;
+    spans.push({ i, j, c, d });
+  }
+  spans.sort((p, q) => p.i - q.i);
+  // Chains of shallow-angled lines with nothing between them are really a big arc.
+  const keep = spans.map(() => true);
+  for (let k = 0; k + 1 < spans.length; k++) {
+    const p = spans[k]!,
+      q = spans[k + 1]!;
+    if (q.i - p.j <= 1 && dot(p.d, q.d) > Math.cos((8 * Math.PI) / 180))
+      keep[k] = keep[k + 1] = false;
+  }
+  return spans.filter((_, k) => keep[k]);
+}
+
+/** Intersection of two lines (point + direction), or null when nearly parallel. */
+function intersect(c1: Point, d1: Point, c2: Point, d2: Point) {
+  const cross = d1.x * d2.y - d1.y * d2.x;
+  if (Math.abs(cross) < 1e-6) return null;
+  const t = ((c2.x - c1.x) * d2.y - (c2.y - c1.y) * d2.x) / cross;
+  return add(c1, mul(d1, t));
+}
+
+/**
+ * Fits one corner-to-corner run (or a whole smooth loop when t1/t2 are given):
+ * straight stretches become exact lines, the parts between them become cubic
+ * curves that leave and join each line along its own direction (no kinks).
+ */
+function fitRun(points: Point[], tol: number, out: Segment[], t1?: Point, t2?: Point, minLen = 5) {
+  const n = points.length;
+  if (n < 2) return;
+  if (n === 2) {
+    out.push({ type: "L", to: points[1]! });
     return;
   }
-  fitCubic(points, t1 ?? endTangent(points, true), t2 ?? endTangent(points, false), tol, out);
+  const spans = findLineSpans(points, tol, minLen);
+  let cursor = 0;
+  let from = points[0]!;
+  let tanIn: Point | undefined = t1;
+  const curve = (pts: Point[], a?: Point, b?: Point) => {
+    if (pts.length < 2 || (pts.length === 2 && len(sub(pts[1]!, pts[0]!)) < 1e-6)) return;
+    if (pts.length === 2 && !a && !b) {
+      out.push({ type: "L", to: pts[1]! });
+      return;
+    }
+    fitCubic(pts, a ?? endTangent(pts, true), b ?? endTangent(pts, false), tol, out);
+  };
+  for (let s = 0; s < spans.length; s++) {
+    const { i, j, c, d } = spans[s]!;
+    let start = i === 0 ? points[0]! : project(points[i]!, c, d);
+    const end = j === n - 1 ? points[n - 1]! : project(points[j]!, c, d);
+    if (i - cursor <= 1 && s > 0) {
+      // Two lines meet with no curve between them: join them where they cross.
+      const prev = spans[s - 1]!;
+      const hit = intersect(prev.c, prev.d, c, d);
+      if (hit && len(sub(hit, from)) < tol * 4) {
+        const last = out[out.length - 1];
+        if (last && last.type === "L") last.to = hit;
+        start = hit;
+      }
+    } else if (i > cursor || cursor === 0) {
+      curve([from, ...points.slice(cursor + 1, i), start], tanIn, mul(d, -1));
+    }
+    out.push({ type: "L", to: end });
+    from = end;
+    cursor = j;
+    tanIn = d;
+  }
+  if (cursor < n - 1) curve([from, ...points.slice(cursor + 1)], tanIn, t2);
+  else if (len(sub(from, points[n - 1]!)) > 1e-6) out.push({ type: "L", to: points[n - 1]! });
 }
 
 /** Taubin λ/μ smoothing: irons out pixel wobble without shrinking curves. Fixed indices stay put. */
@@ -603,43 +762,121 @@ function fitContour(raw: Point[], opts: typeof DEFAULTS): TracedPath {
 
 // ---------- 4. Axis snapping ----------
 
-/** Straightens lines that are within a hair of horizontal/vertical, moving attached handles too. */
-function snapAxisLines(path: TracedPath): TracedPath {
+/**
+ * Lets `edit` move a path's vertices (vertex k = start of segment k); curve
+ * handles attached to a moved vertex move with it so the curve shape is kept.
+ */
+function editVertices(
+  path: TracedPath,
+  edit: (verts: Point[], segs: Segment[]) => void,
+): TracedPath {
   const segs = path.segments.map((s) => ({ ...s }));
   const n = segs.length;
   if (n < 2) return path;
-  // vertex k = start of segment k (vertex 0 = path.start = end of last segment).
   const verts: Point[] = [{ ...path.start }, ...segs.slice(0, -1).map((s) => ({ ...s.to }))];
   const orig = verts.map((p) => ({ ...p }));
-  const maxSlope = Math.tan((1.2 * Math.PI) / 180);
-  for (let k = 0; k < n; k++) {
-    if (segs[k]!.type !== "L") continue;
-    const a = verts[k]!,
-      b = verts[(k + 1) % n]!;
-    const dx = b.x - a.x,
-      dy = b.y - a.y;
-    if (Math.abs(dy) <= 1.5 && Math.abs(dy) <= Math.abs(dx) * maxSlope) {
-      const y = (a.y + b.y) / 2;
-      a.y = y;
-      b.y = y;
-    } else if (Math.abs(dx) <= 1.5 && Math.abs(dx) <= Math.abs(dy) * maxSlope) {
-      const x = (a.x + b.x) / 2;
-      a.x = x;
-      b.x = x;
-    }
-  }
+  edit(verts, segs);
   for (let k = 0; k < n; k++) {
     const s = segs[k]!,
       endIdx = (k + 1) % n;
-    const d0 = sub(verts[k]!, orig[k]!),
-      d1 = sub(verts[endIdx]!, orig[endIdx]!);
     if (s.type === "C") {
-      s.c1 = add(s.c1, d0);
-      s.c2 = add(s.c2, d1);
+      s.c1 = add(s.c1, sub(verts[k]!, orig[k]!));
+      s.c2 = add(s.c2, sub(verts[endIdx]!, orig[endIdx]!));
     }
     s.to = verts[endIdx]!;
   }
-  return { start: verts[0]!, segments: segs as Segment[] };
+  return { start: verts[0]!, segments: segs };
+}
+
+/** Straightens lines that are within a hair of horizontal/vertical. */
+function snapAxisLines(path: TracedPath): TracedPath {
+  const maxSlope = Math.tan((1.2 * Math.PI) / 180);
+  return editVertices(path, (verts, segs) => {
+    const n = segs.length;
+    for (let k = 0; k < n; k++) {
+      if (segs[k]!.type !== "L") continue;
+      const a = verts[k]!,
+        b = verts[(k + 1) % n]!;
+      const dx = b.x - a.x,
+        dy = b.y - a.y;
+      if (Math.abs(dy) <= 1.5 && Math.abs(dy) <= Math.abs(dx) * maxSlope)
+        a.y = b.y = (a.y + b.y) / 2;
+      else if (Math.abs(dx) <= 1.5 && Math.abs(dx) <= Math.abs(dy) * maxSlope)
+        a.x = b.x = (a.x + b.x) / 2;
+    }
+  });
+}
+
+/**
+ * Logos reuse the same edge positions (stem widths, baselines, the canvas edge).
+ * Horizontal/vertical lines whose positions differ by less than `gap` px are
+ * merged to one shared coordinate (length-weighted); lines hugging the image
+ * border land exactly on it.
+ */
+function alignAxes(paths: TracedPath[], width: number, height: number, gap = 0.25): TracedPath[] {
+  type Entry = { value: number; weight: number };
+  const xs: Entry[] = [
+    { value: 0, weight: Infinity },
+    { value: width, weight: Infinity },
+  ];
+  const ys: Entry[] = [
+    { value: 0, weight: Infinity },
+    { value: height, weight: Infinity },
+  ];
+  for (const p of paths) {
+    let from = p.start;
+    for (const s of p.segments) {
+      if (s.type === "L") {
+        const l = len(sub(s.to, from));
+        if (s.to.x === from.x) xs.push({ value: from.x, weight: l });
+        else if (s.to.y === from.y) ys.push({ value: from.y, weight: l });
+      }
+      from = s.to;
+    }
+  }
+  const clusters = (entries: Entry[]) => {
+    entries.sort((a, b) => a.value - b.value);
+    const map = new Map<number, number>();
+    let group: Entry[] = [];
+    const flush = () => {
+      let w = 0,
+        v = 0;
+      for (const e of group) {
+        w += e.weight;
+        v += e.value * e.weight;
+      }
+      // A canvas edge in the group wins outright, so border lines land exactly on it.
+      const anchor = group.find((e) => e.weight === Infinity);
+      for (const e of group) map.set(e.value, anchor ? anchor.value : v / w);
+      group = [];
+    };
+    for (const e of entries) {
+      if (group.length && e.value - group[group.length - 1]!.value > gap) flush();
+      group.push(e);
+    }
+    flush();
+    return map;
+  };
+  const xMap = clusters(xs),
+    yMap = clusters(ys);
+  return paths.map((p) =>
+    editVertices(p, (verts, segs) => {
+      const n = segs.length;
+      const orig = verts.map((v) => ({ ...v }));
+      for (let k = 0; k < n; k++) {
+        if (segs[k]!.type !== "L") continue;
+        const a = orig[k]!,
+          b = orig[(k + 1) % n]!;
+        if (a.x === b.x) {
+          const x = xMap.get(a.x);
+          if (x !== undefined) verts[k]!.x = verts[(k + 1) % n]!.x = x;
+        } else if (a.y === b.y) {
+          const y = yMap.get(a.y);
+          if (y !== undefined) verts[k]!.y = verts[(k + 1) % n]!.y = y;
+        }
+      }
+    }),
+  );
 }
 
 // ---------- Public API ----------
@@ -652,13 +889,14 @@ export function vectorize(
 ): TracedPath[] {
   const opts = { ...DEFAULTS, ...options };
   const smoothed = blurCoverage(coverage, width, height, opts.smooth);
-  return traceContours(smoothed, width, height, opts.threshold)
+  const paths = traceContours(smoothed, width, height, opts.threshold)
     .filter((c) => Math.abs(signedArea(c)) >= opts.minArea)
     .map((c) => snapAxisLines(fitContour(c, opts)));
+  return alignAxes(paths, width, height);
 }
 
 const fmt = (n: number) => {
-  const r = Math.round(n * 100) / 100;
+  const r = Math.round(n * 1000) / 1000;
   return Object.is(r, -0) ? "0" : String(r);
 };
 const pt = (p: Point) => `${fmt(p.x)} ${fmt(p.y)}`;
@@ -674,9 +912,20 @@ export function pathData(paths: TracedPath[]) {
     .join("");
 }
 
-export function toSvg(paths: TracedPath[], width: number, height: number) {
+export type ViewBox = { x: number; y: number; width: number; height: number };
+
+/**
+ * SVG in source-pixel units. `view` may extend past the traced area (e.g. to give
+ * a logo that touches its canvas an even margin); tiny sources get a larger
+ * default display size since vectors scale freely.
+ */
+export function toSvg(paths: TracedPath[], width: number, height: number, view?: ViewBox) {
+  const v = view ?? { x: 0, y: 0, width, height };
+  const display = Math.max(1, 1024 / Math.max(v.width, v.height));
+  const w = Math.round(v.width * display),
+    h = Math.round(v.height * display);
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">` +
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${fmt(v.x)} ${fmt(v.y)} ${fmt(v.width)} ${fmt(v.height)}" width="${w}" height="${h}">` +
     `<path fill="#000" fill-rule="evenodd" d="${pathData(paths)}"/></svg>`
   );
 }

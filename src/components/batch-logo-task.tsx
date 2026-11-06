@@ -62,7 +62,7 @@ export function BatchLogoTask({ job, background, onRemove }: { job: BatchJob; ba
       </div>
       <div className="flex flex-col gap-2 p-2">
         <p className="truncate text-xs font-medium" title={job.file.name}>{job.file.name}</p>
-        <div className="flex items-center justify-between gap-1 text-[10px] text-muted-foreground"><span className="capitalize">{job.options?.provider ?? "Pending"}</span><span role="status">{running ? `${Math.round(progress)}%` : status}</span></div>
+        <div className="flex items-center justify-between gap-1 text-[10px] text-muted-foreground"><span className="capitalize">{job.options ? (job.options.mode === "trace" ? "Exact trace" : job.options.provider) : "Pending"}</span><span role="status">{running ? `${Math.round(progress)}%` : status}</span></div>
         <div role="progressbar" aria-label={`${job.file.name} progress`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress)} className="h-1 overflow-hidden rounded-full bg-muted"><div className="h-full bg-primary transition-[width] motion-reduce:transition-none" style={{ width: `${progress}%` }} /></div>
         {status === "Failed" && <Button variant="outline" size="sm" onClick={() => setAttempt((a) => a + 1)}><RotateCcw className="h-3 w-3" />Retry</Button>}
         {output && <div className="grid grid-cols-2 gap-1">
