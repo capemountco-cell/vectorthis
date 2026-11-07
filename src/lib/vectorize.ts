@@ -23,6 +23,11 @@ export type VectorizeOptions = {
   smooth?: number;
   /** Taubin smoothing passes over the traced outline between corners (removes compression wobble). */
   outlineSmoothing?: number;
+  /**
+   * Max distance (px) a curve may move when two neighbouring curves are merged into one.
+   * Irons out low-frequency wobble (S-bumps) from noisy/resampled sources; 0 = off.
+   */
+  fairing?: number;
 };
 
 const DEFAULTS = {
@@ -32,6 +37,7 @@ const DEFAULTS = {
   cornerAngle: 55,
   smooth: 0,
   outlineSmoothing: 8,
+  fairing: 0,
 };
 
 /** Separable Gaussian blur; straight edges keep their 50% position, noise averages out. */
@@ -1139,6 +1145,66 @@ function smoothJoins(paths: TracedPath[], maxAngle = (20 * Math.PI) / 180): Trac
   });
 }
 
+// ---------- 7. Fairing ----------
+
+function sampleCubic(c: Point[], n: number) {
+  const out: Point[] = [];
+  for (let i = 0; i <= n; i++) out.push(bez(c, i / n));
+  return out;
+}
+
+/**
+ * Merges neighbouring curves that meet smoothly whenever one cubic stays within `tol`
+ * of both. Noisy sources make the fitter split long gentle edges into several curves
+ * that wobble around the true edge; one curve through them is the cleaner, truer shape.
+ * Corners and lines are never touched.
+ */
+function fairCurves(paths: TracedPath[], tol: number, maxAngle = (15 * Math.PI) / 180): TracedPath[] {
+  if (tol <= 0) return paths;
+  const cosMax = Math.cos(maxAngle);
+  return paths.map((p) => {
+    // Curves as [p0, c1, c2, p3]; lines kept as-is.
+    type Item = { kind: "L"; to: Point } | { kind: "C"; c: Point[] };
+    let from = p.start;
+    let items: Item[] = p.segments.map((s) => {
+      const it: Item = s.type === "L" ? { kind: "L", to: s.to } : { kind: "C", c: [from, s.c1, s.c2, s.to] };
+      from = s.to;
+      return it;
+    });
+    let changed = true;
+    while (changed && items.length > 1) {
+      changed = false;
+      for (let k = 0; k + 1 < items.length; k++) {
+        const a = items[k]!,
+          b = items[k + 1]!;
+        if (a.kind !== "C" || b.kind !== "C") continue;
+        const tin = sub(a.c[3]!, a.c[2]!),
+          tout = sub(b.c[1]!, b.c[0]!);
+        if (len(tin) < 1e-9 || len(tout) < 1e-9 || dot(norm(tin), norm(tout)) < cosMax) continue;
+        const pts = [...sampleCubic(a.c, 24), ...sampleCubic(b.c, 24).slice(1)];
+        const t1 = norm(sub(a.c[1]!, a.c[0]!)),
+          t2 = norm(sub(b.c[2]!, b.c[3]!));
+        if (!Number.isFinite(t1.x) || !Number.isFinite(t2.x)) continue;
+        let u = chordParams(pts);
+        let c = generateBezier(pts, u, t1, t2);
+        for (let it = 0; it < 8; it++) {
+          u = reparameterize(c, pts, u);
+          c = generateBezier(pts, u, t1, t2);
+        }
+        if (maxError(c, pts, u).max > tol) continue;
+        items.splice(k, 2, { kind: "C", c });
+        changed = true;
+      }
+    }
+    // The last and first items meet at the path start; leave that seam alone.
+    const segments: Segment[] = items.map((it) =>
+      it.kind === "L" ? { type: "L", to: it.to } : { type: "C", c1: it.c[1]!, c2: it.c[2]!, to: it.c[3]! },
+    );
+    items = [];
+    return { start: p.start, segments };
+  });
+}
+
 // ---------- Public API ----------
 
 export function vectorize(
@@ -1154,7 +1220,7 @@ export function vectorize(
     .map((c) => snapAxisLines(fitContour(c, opts)));
   // Arcs recompute line ends from intersections; re-straighten so axis lines stay exactly axis-aligned.
   const arced = roundCornersAsArcs(paths, opts.tolerance).map(snapAxisLines);
-  return smoothJoins(alignAxes(arced, width, height));
+  return fairCurves(smoothJoins(alignAxes(arced, width, height)), opts.fairing);
 }
 
 const fmt = (n: number) => {
