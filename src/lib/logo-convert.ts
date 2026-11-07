@@ -1,5 +1,5 @@
 import { withWhiteBackground } from "@/lib/png-background";
-import { coverageFromRgba, toSvg, vectorize, type TracedPath } from "@/lib/vectorize";
+import { coverageFromRgba, toSvg, vectorizeDetailed, type TracedPath } from "@/lib/vectorize";
 import { coverageSignature } from "@/lib/logo-fidelity";
 import type { ViewBox } from "@/lib/outline";
 
@@ -123,7 +123,7 @@ export async function toOutputs(src: string): Promise<LogoOutputs> {
   const view: ViewBox = margin
     ? { x: ink.x0 - margin - x0, y: ink.y0 - margin - y0, width: ink.x1 - ink.x0 + 1 + 2 * margin, height: ink.y1 - ink.y0 + 1 + 2 * margin }
     : { x: 0, y: 0, width: cw, height: ch };
-  const paths = vectorize(croppedCoverage, cw, ch);
+  const paths = vectorizeDetailed(croppedCoverage, cw, ch);
   const svg = toSvg(paths, cw, ch, view);
   // Shape fingerprint, so a redraw can be scored against the original.
   const signature = coverageSignature(croppedCoverage, cw, ch);

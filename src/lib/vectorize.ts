@@ -1204,3 +1204,44 @@ export function rgbaToSvg(
     height,
   );
 }
+
+/** Catmull-Rom (bicubic) upsampling of a coverage map, clamped to 0..1. */
+export function upsampleCoverage(src: Float32Array, width: number, height: number, k: number) {
+  const W = width * k, H = height * k;
+  const out = new Float32Array(W * H);
+  const at = (x: number, y: number) =>
+    src[Math.min(height - 1, Math.max(0, y)) * width + Math.min(width - 1, Math.max(0, x))]!;
+  const cr = (p0: number, p1: number, p2: number, p3: number, t: number) =>
+    p1 + 0.5 * t * (p2 - p0 + t * (2 * p0 - 5 * p1 + 4 * p2 - p3 + t * (3 * (p1 - p2) + p3 - p0)));
+  for (let Y = 0; Y < H; Y++) {
+    const sy = (Y + 0.5) / k - 0.5, y = Math.floor(sy), ty = sy - y;
+    for (let X = 0; X < W; X++) {
+      const sx = (X + 0.5) / k - 0.5, x = Math.floor(sx), tx = sx - x;
+      const r = [-1, 0, 1, 2].map((j) => cr(at(x - 1, y + j), at(x, y + j), at(x + 1, y + j), at(x + 2, y + j), tx));
+      out[Y * W + X] = Math.min(1, Math.max(0, cr(r[0]!, r[1]!, r[2]!, r[3]!, ty)));
+    }
+  }
+  return out;
+}
+
+/**
+ * Small or low-resolution logos (e.g. thin taglines a few px tall) give the curve fitter too few
+ * points, which produces spikes and wobble. Trace a smooth bicubic upsample instead, then scale back.
+ */
+export function vectorizeDetailed(
+  coverage: Float32Array,
+  width: number,
+  height: number,
+  options: VectorizeOptions = {},
+  targetLongSide = 3000,
+): TracedPath[] {
+  const k = Math.max(1, Math.min(6, Math.floor(targetLongSide / Math.max(width, height))));
+  if (k === 1) return vectorize(coverage, width, height, options);
+  const minArea = (options.minArea ?? DEFAULTS.minArea) * k * k;
+  const paths = vectorize(upsampleCoverage(coverage, width, height, k), width * k, height * k, { ...options, minArea });
+  const s = (p: Point): Point => ({ x: p.x / k, y: p.y / k });
+  return paths.map((p) => ({
+    start: s(p.start),
+    segments: p.segments.map((g) => (g.type === "L" ? { type: "L", to: s(g.to) } : { type: "C", c1: s(g.c1), c2: s(g.c2), to: s(g.to) })),
+  }));
+}
