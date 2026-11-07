@@ -28,6 +28,8 @@ export type VectorizeOptions = {
    * Irons out low-frequency wobble (S-bumps) from noisy/resampled sources; 0 = off.
    */
   fairing?: number;
+  /** Arc-length Gaussian smoothing radius (px) for slow edge wobble on noisy sources; 0 = off. */
+  outlineSigma?: number;
 };
 
 const DEFAULTS = {
@@ -38,6 +40,7 @@ const DEFAULTS = {
   smooth: 0,
   outlineSmoothing: 8,
   fairing: 0,
+  outlineSigma: 0,
 };
 
 /** Separable Gaussian blur; straight edges keep their 50% position, noise averages out. */
@@ -732,9 +735,68 @@ function smoothOutline(pts: Point[], fixed: Set<number>, passes: number) {
   return cur;
 }
 
+/**
+ * Arc-length Gaussian smoothing of a closed outline, for noisy sources whose edge wobble is
+ * too slow (10-30px) for a few neighbour-averaging passes. The radius shrinks towards each
+ * corner so corners stay put without the hooks fixed-point smoothing leaves beside them,
+ * and 2G - G² cancels the first-order shrinkage on curves.
+ */
+function gaussianOutline(pts: Point[], corners: number[], sigma: number) {
+  const n = pts.length;
+  if (sigma <= 0 || n < 8) return pts;
+  const s = new Float64Array(n + 1);
+  for (let i = 1; i <= n; i++) s[i] = s[i - 1]! + len(sub(pts[i % n]!, pts[i - 1]!));
+  const total = s[n]!;
+  const arc = (i: number, j: number) => {
+    const d = Math.abs(s[i]! - s[j]!);
+    return Math.min(d, total - d);
+  };
+  const sig = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    let d = Infinity;
+    for (const c of corners) d = Math.min(d, arc(i, c));
+    sig[i] = Math.min(sigma, d / 3);
+  }
+  const blur = (src: Point[]) => {
+    const out = src.slice();
+    for (let i = 0; i < n; i++) {
+      const g = sig[i]!;
+      if (g < 0.3) continue;
+      const reach = 3 * g;
+      let wx = 0,
+        wy = 0,
+        ws = 0;
+      for (const dir of [1, -1] as const) {
+        let acc = 0;
+        for (let k = dir === 1 ? 0 : 1; k < n; k++) {
+          const j = (i + dir * k + n * 2) % n;
+          if (k > 0) {
+            const prev = (j - dir + n) % n;
+            acc += len(sub(pts[j]!, pts[prev]!));
+          }
+          if (acc > reach) break;
+          const w = Math.exp(-(acc * acc) / (2 * g * g));
+          wx += w * src[j]!.x;
+          wy += w * src[j]!.y;
+          ws += w;
+        }
+      }
+      out[i] = { x: wx / ws, y: wy / ws };
+    }
+    return out;
+  };
+  const once = blur(pts);
+  const twice = blur(once);
+  return once.map((p, i) => ({ x: 2 * p.x - twice[i]!.x, y: 2 * p.y - twice[i]!.y }));
+}
+
 function fitContour(raw: Point[], opts: typeof DEFAULTS): TracedPath {
   const corners = findCorners(raw, opts.cornerAngle);
-  const pts = smoothOutline(raw, new Set(corners), opts.outlineSmoothing);
+  const pts = smoothOutline(
+    gaussianOutline(raw, corners, opts.outlineSigma),
+    new Set(corners),
+    opts.outlineSmoothing,
+  );
   const n = pts.length;
   // A "straight" stretch must be long for its shape: short near-flat bits of a big
   // bowl (an O, a U) are curve, and turning them into lines leaves visible flats.
