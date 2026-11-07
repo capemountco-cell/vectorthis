@@ -1258,6 +1258,9 @@ function fairCurves(paths: TracedPath[], tol: number, maxAngle = (15 * Math.PI) 
         const tin = sub(a.c[3]!, a.c[2]!),
           tout = sub(b.c[1]!, b.c[0]!);
         if (len(tin) < 1e-9 || len(tout) < 1e-9 || dot(norm(tin), norm(tout)) < cosMax) continue;
+        // Short curves are real detail (a blunt tip, a small nub), not wobble: leave them.
+        const minChord = 30 * tol;
+        if (len(sub(a.c[3]!, a.c[0]!)) < minChord || len(sub(b.c[3]!, b.c[0]!)) < minChord) continue;
         const pts = [...sampleCubic(a.c, 24), ...sampleCubic(b.c, 24).slice(1)];
         const t1 = norm(sub(a.c[1]!, a.c[0]!)),
           t2 = norm(sub(b.c[2]!, b.c[3]!));
@@ -1388,7 +1391,7 @@ export function vectorizeDetailed(
       // Resampled screenshots wobble slowly (10-30px period) along long edges: blur along
       // the outline at that scale, then merge any curves that still meet smoothly.
       outlineSigma: 3.5 * softness,
-      fairing: 0.55 * softness,
+      fairing: 0.35 * softness,
       ...options,
     });
   }
