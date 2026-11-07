@@ -7,6 +7,8 @@ import { baseName, modeInfo } from "@/components/app/modes";
 import { ProcessingScreen } from "@/components/app/processing-screen";
 import { ResultWorkspace, type Version } from "@/components/app/result-workspace";
 import { StartScreen } from "@/components/app/start-screen";
+import { PageDropOverlay } from "@/components/app/page-drop-overlay";
+import { useWindowImageDrop } from "@/hooks/use-image-drop";
 import { toOutputs } from "@/lib/logo-convert";
 import { flattenLogo, logoFile } from "@/lib/logo-files";
 import { DEFAULT_TASK_MODE, readAsDataUrl, type TaskMode } from "@/lib/logo-task";

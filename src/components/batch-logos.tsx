@@ -6,7 +6,8 @@ import { MODES } from "@/components/app/modes";
 import { Segmented } from "@/components/app/segmented";
 import { downloadFile, isMobileSaveDevice } from "@/lib/save-png";
 import type { TaskMode, TaskOptions } from "@/lib/logo-task";
-import { useImageDrop } from "@/hooks/use-image-drop";
+import { useImageDrop, useWindowImageDrop } from "@/hooks/use-image-drop";
+import { PageDropOverlay } from "@/components/app/page-drop-overlay";
 import { cn } from "@/lib/utils";
 
 export function BatchLogos({ mode, onMode }: { mode: TaskMode; onMode: (mode: TaskMode) => void }) {
