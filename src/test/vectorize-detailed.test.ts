@@ -71,3 +71,39 @@ describe("vectorizeDetailed on enlarged screenshots", () => {
     expect(Math.max(...radii.map((v) => Math.abs(v - mean)))).toBeLessThan(0.6);
   });
 });
+
+describe("vectorizeDetailed on small crisp logos", () => {
+  // A small antialiased circle goes through the bicubic-upsampled path. Upsampling an
+  // antialiased edge leaves a one-pixel ripple that used to be traced as fine scallops.
+  it("traces a smooth curve, not the upsampling ripple", () => {
+    const w = 100, R = 38, c0 = 50, c = new Float32Array(w * w);
+    for (let y = 0; y < w; y++)
+      for (let x = 0; x < w; x++) {
+        let a = 0;
+        for (let sy = 0; sy < 4; sy++)
+          for (let sx = 0; sx < 4; sx++) a += (x + (sx + 0.5) / 4 - c0) ** 2 + (y + (sy + 0.5) / 4 - c0) ** 2 < R * R ? 1 : 0;
+        c[y * w + x] = a / 16;
+      }
+    const paths = vectorizeDetailed(c, w, w);
+    expect(paths.length).toBe(1);
+    // Previously ~200 tiny curves following the ripple.
+    expect(paths[0]!.segments.length).toBeLessThan(40);
+    const radii: number[] = [];
+    let from = paths[0]!.start;
+    for (const s of paths[0]!.segments) {
+      for (let t = 0; t < 1; t += 0.05) {
+        const m = 1 - t;
+        const p =
+          s.type === "L"
+            ? { x: from.x + (s.to.x - from.x) * t, y: from.y + (s.to.y - from.y) * t }
+            : {
+                x: m * m * m * from.x + 3 * m * m * t * s.c1.x + 3 * m * t * t * s.c2.x + t * t * t * s.to.x,
+                y: m * m * m * from.y + 3 * m * m * t * s.c1.y + 3 * m * t * t * s.c2.y + t * t * t * s.to.y,
+              };
+        radii.push(Math.hypot(p.x - c0, p.y - c0));
+      }
+      from = s.to;
+    }
+    for (const r of radii) expect(Math.abs(r - R)).toBeLessThan(0.12);
+  });
+});
