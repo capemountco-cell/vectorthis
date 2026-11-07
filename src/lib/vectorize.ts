@@ -1235,6 +1235,16 @@ export function vectorizeDetailed(
   options: VectorizeOptions = {},
   targetLongSide = 3000,
 ): TracedPath[] {
+  // Blurry / resampled uploads have wide, uneven edge ramps; tracing them tightly turns that
+  // noise into scalloped edges, so fit looser and smooth harder instead of upsampling.
+  const softness = edgeSoftness(coverage, width, height);
+  if (softness > 1.3) {
+    return vectorize(coverage, width, height, {
+      tolerance: 0.35 * softness * softness,
+      outlineSmoothing: Math.round(18 * softness * softness),
+      ...options,
+    });
+  }
   const k = Math.max(1, Math.min(6, Math.floor(targetLongSide / Math.max(width, height))));
   if (k === 1) return vectorize(coverage, width, height, options);
   const minArea = (options.minArea ?? DEFAULTS.minArea) * k * k;
@@ -1244,4 +1254,17 @@ export function vectorizeDetailed(
     start: s(p.start),
     segments: p.segments.map((g) => (g.type === "L" ? { type: "L", to: s(g.to) } : { type: "C", c1: s(g.c1), c2: s(g.c2), to: s(g.to) })),
   }));
+}
+
+/** Partial-coverage pixels per edge crossing: ~0.5-1 for crisp art, ~2+ for blurry or resampled images. */
+export function edgeSoftness(c: Float32Array, width: number, height: number) {
+  let partial = 0, cross = 0;
+  for (let y = 0; y < height; y++)
+    for (let x = 0; x < width; x++) {
+      const v = c[y * width + x]!;
+      if (v > 0.05 && v < 0.95) partial++;
+      if (x > 0 && v >= 0.5 !== c[y * width + x - 1]! >= 0.5) cross++;
+      if (y > 0 && v >= 0.5 !== c[(y - 1) * width + x]! >= 0.5) cross++;
+    }
+  return cross ? partial / cross : 0;
 }
