@@ -23,6 +23,13 @@ export type VectorizeOptions = {
   smooth?: number;
   /** Taubin smoothing passes over the traced outline between corners (removes compression wobble). */
   outlineSmoothing?: number;
+  /**
+   * Max distance (px) a curve may move when two neighbouring curves are merged into one.
+   * Irons out low-frequency wobble (S-bumps) from noisy/resampled sources; 0 = off.
+   */
+  fairing?: number;
+  /** Arc-length Gaussian smoothing radius (px) for slow edge wobble on noisy sources; 0 = off. */
+  outlineSigma?: number;
 };
 
 const DEFAULTS = {
@@ -32,6 +39,8 @@ const DEFAULTS = {
   cornerAngle: 55,
   smooth: 0,
   outlineSmoothing: 8,
+  fairing: 0,
+  outlineSigma: 0,
 };
 
 /** Separable Gaussian blur; straight edges keep their 50% position, noise averages out. */
@@ -726,9 +735,84 @@ function smoothOutline(pts: Point[], fixed: Set<number>, passes: number) {
   return cur;
 }
 
+/**
+ * Arc-length Gaussian smoothing of a closed outline, for noisy sources whose edge wobble is
+ * too slow (10-30px) for a few neighbour-averaging passes. The radius shrinks towards each
+ * corner so corners stay put without the hooks fixed-point smoothing leaves beside them,
+ * and 2G - G² cancels the first-order shrinkage on curves.
+ */
+function gaussianOutline(pts: Point[], corners: number[], sigma: number) {
+  const n = pts.length;
+  if (sigma <= 0 || n < 8) return pts;
+  const s = new Float64Array(n + 1);
+  for (let i = 1; i <= n; i++) s[i] = s[i - 1]! + len(sub(pts[i % n]!, pts[i - 1]!));
+  // Anchors: real corners plus any tight bend (e.g. a blunt leaf tip) — blurring across
+  // those would round them off and the shrink compensation would then overshoot into a hook.
+  const anchor = new Uint8Array(n);
+  for (const c of corners) anchor[c] = 1;
+  const cos30 = Math.cos((30 * Math.PI) / 180);
+  for (let i = 0; i < n; i++) {
+    const a = norm(sub(pts[i]!, walk(pts, i, 3, -1)));
+    const b = norm(sub(walk(pts, i, 3, 1), pts[i]!));
+    if (dot(a, b) < cos30) anchor[i] = 1;
+  }
+  // Arc distance to the nearest anchor: two sweeps each way around the closed outline.
+  const dist = new Float64Array(n).fill(Infinity);
+  for (let i = 0; i < n; i++) if (anchor[i]) dist[i] = 0;
+  for (let pass = 0; pass < 2; pass++)
+    for (let k = 1; k <= n; k++) {
+      const i = k % n,
+        p = k - 1;
+      dist[i] = Math.min(dist[i]!, dist[p]! + (s[k]! - s[k - 1]!));
+    }
+  for (let pass = 0; pass < 2; pass++)
+    for (let k = n - 1; k >= 0; k--) {
+      const i = k,
+        nx = (k + 1) % n;
+      dist[i] = Math.min(dist[i]!, dist[nx]! + (s[k + 1]! - s[k]!));
+    }
+  const sig = new Float64Array(n);
+  for (let i = 0; i < n; i++) sig[i] = Math.min(sigma, dist[i]! / 3);
+  const blur = (src: Point[]) => {
+    const out = src.slice();
+    for (let i = 0; i < n; i++) {
+      const g = sig[i]!;
+      if (g < 0.3) continue;
+      const reach = 3 * g;
+      let wx = 0,
+        wy = 0,
+        ws = 0;
+      for (const dir of [1, -1] as const) {
+        let acc = 0;
+        for (let k = dir === 1 ? 0 : 1; k < n; k++) {
+          const j = (i + dir * k + n * 2) % n;
+          if (k > 0) {
+            const prev = (j - dir + n) % n;
+            acc += len(sub(pts[j]!, pts[prev]!));
+          }
+          if (acc > reach) break;
+          const w = Math.exp(-(acc * acc) / (2 * g * g));
+          wx += w * src[j]!.x;
+          wy += w * src[j]!.y;
+          ws += w;
+        }
+      }
+      out[i] = { x: wx / ws, y: wy / ws };
+    }
+    return out;
+  };
+  const once = blur(pts);
+  const twice = blur(once);
+  return once.map((p, i) => ({ x: 2 * p.x - twice[i]!.x, y: 2 * p.y - twice[i]!.y }));
+}
+
 function fitContour(raw: Point[], opts: typeof DEFAULTS): TracedPath {
   const corners = findCorners(raw, opts.cornerAngle);
-  const pts = smoothOutline(raw, new Set(corners), opts.outlineSmoothing);
+  const pts = smoothOutline(
+    gaussianOutline(raw, corners, opts.outlineSigma),
+    new Set(corners),
+    opts.outlineSmoothing,
+  );
   const n = pts.length;
   // A "straight" stretch must be long for its shape: short near-flat bits of a big
   // bowl (an O, a U) are curve, and turning them into lines leaves visible flats.
@@ -1139,6 +1223,68 @@ function smoothJoins(paths: TracedPath[], maxAngle = (20 * Math.PI) / 180): Trac
   });
 }
 
+// ---------- 7. Fairing ----------
+
+function sampleCubic(c: Point[], n: number) {
+  const out: Point[] = [];
+  for (let i = 0; i <= n; i++) out.push(bez(c, i / n));
+  return out;
+}
+
+/**
+ * Merges neighbouring curves that meet smoothly whenever one cubic stays within `tol`
+ * of both. Noisy sources make the fitter split long gentle edges into several curves
+ * that wobble around the true edge; one curve through them is the cleaner, truer shape.
+ * Corners and lines are never touched.
+ */
+function fairCurves(paths: TracedPath[], tol: number, maxAngle = (15 * Math.PI) / 180): TracedPath[] {
+  if (tol <= 0) return paths;
+  const cosMax = Math.cos(maxAngle);
+  return paths.map((p) => {
+    // Curves as [p0, c1, c2, p3]; lines kept as-is.
+    type Item = { kind: "L"; to: Point } | { kind: "C"; c: Point[] };
+    let from = p.start;
+    const items: Item[] = p.segments.map((s) => {
+      const it: Item = s.type === "L" ? { kind: "L", to: s.to } : { kind: "C", c: [from, s.c1, s.c2, s.to] };
+      from = s.to;
+      return it;
+    });
+    let changed = true;
+    while (changed && items.length > 1) {
+      changed = false;
+      for (let k = 0; k + 1 < items.length; k++) {
+        const a = items[k]!,
+          b = items[k + 1]!;
+        if (a.kind !== "C" || b.kind !== "C") continue;
+        const tin = sub(a.c[3]!, a.c[2]!),
+          tout = sub(b.c[1]!, b.c[0]!);
+        if (len(tin) < 1e-9 || len(tout) < 1e-9 || dot(norm(tin), norm(tout)) < cosMax) continue;
+        // Short curves are real detail (a blunt tip, a small nub), not wobble: leave them.
+        const minChord = 30 * tol;
+        if (len(sub(a.c[3]!, a.c[0]!)) < minChord || len(sub(b.c[3]!, b.c[0]!)) < minChord) continue;
+        const pts = [...sampleCubic(a.c, 24), ...sampleCubic(b.c, 24).slice(1)];
+        const t1 = norm(sub(a.c[1]!, a.c[0]!)),
+          t2 = norm(sub(b.c[2]!, b.c[3]!));
+        if (!Number.isFinite(t1.x) || !Number.isFinite(t2.x)) continue;
+        let u = chordParams(pts);
+        let c = generateBezier(pts, u, t1, t2);
+        for (let it = 0; it < 8; it++) {
+          u = reparameterize(c, pts, u);
+          c = generateBezier(pts, u, t1, t2);
+        }
+        if (maxError(c, pts, u).max > tol) continue;
+        items.splice(k, 2, { kind: "C", c });
+        changed = true;
+      }
+    }
+    // The last and first items meet at the path start; leave that seam alone.
+    const segments: Segment[] = items.map((it) =>
+      it.kind === "L" ? { type: "L", to: it.to } : { type: "C", c1: it.c[1]!, c2: it.c[2]!, to: it.c[3]! },
+    );
+    return { start: p.start, segments };
+  });
+}
+
 // ---------- Public API ----------
 
 export function vectorize(
@@ -1154,7 +1300,7 @@ export function vectorize(
     .map((c) => snapAxisLines(fitContour(c, opts)));
   // Arcs recompute line ends from intersections; re-straighten so axis lines stay exactly axis-aligned.
   const arced = roundCornersAsArcs(paths, opts.tolerance).map(snapAxisLines);
-  return smoothJoins(alignAxes(arced, width, height));
+  return fairCurves(smoothJoins(alignAxes(arced, width, height)), opts.fairing);
 }
 
 const fmt = (n: number) => {
@@ -1242,6 +1388,10 @@ export function vectorizeDetailed(
     return vectorize(coverage, width, height, {
       tolerance: 0.35 * softness * softness,
       outlineSmoothing: Math.round(18 * softness * softness),
+      // Resampled screenshots wobble slowly (10-30px period) along long edges: blur along
+      // the outline at that scale, then merge any curves that still meet smoothly.
+      outlineSigma: 3.5 * softness,
+      fairing: 0.35 * softness,
       ...options,
     });
   }
