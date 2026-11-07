@@ -52,7 +52,10 @@ export async function renderPngPair(svg: string, view: ViewBox, size = DEFAULT_P
   return { png, whitePng: canvas.toDataURL("image/png"), width: canvas.width, height: canvas.height };
 }
 
-/** 1 = the vector covers exactly the same pixels as the traced image. */
+/**
+ * Shape match (hard IoU at the 50% ink edge) between the vector and the traced image;
+ * 1 = identical. A soft per-pixel score punished blurry uploads for their blur, not the trace.
+ */
 async function pixelAccuracy(svg: string, view: ViewBox, coverage: Float32Array, width: number, height: number) {
   const vector = await decodeSvg(svg);
   const { ctx } = canvas2d(width, height);
@@ -60,13 +63,13 @@ async function pixelAccuracy(svg: string, view: ViewBox, coverage: Float32Array,
   // image there at view size puts one unit on one source pixel.
   ctx.drawImage(vector, view.x, view.y, view.width, view.height);
   const drawn = ctx.getImageData(0, 0, width, height).data;
-  let diff = 0, union = 0;
+  let both = 0, union = 0;
   for (let i = 0; i < coverage.length; i++) {
-    const a = coverage[i] ?? 0, b = (drawn[i * 4 + 3] ?? 0) / 255;
-    diff += Math.abs(a - b);
-    union += Math.max(a, b);
+    const a = (coverage[i] ?? 0) >= 0.5, b = (drawn[i * 4 + 3] ?? 0) >= 128;
+    if (a && b) both++;
+    if (a || b) union++;
   }
-  return union ? Math.max(0, 1 - diff / union) : 0;
+  return union ? both / union : 0;
 }
 
 export type LogoOutputs = {

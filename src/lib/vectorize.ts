@@ -132,7 +132,10 @@ export function coverageFromRgba(rgba: Uint8ClampedArray, width: number, height:
   const strong: number[] = [];
   for (let i = 0; i < n; i++) if (dist[i]! > max * 0.6) strong.push(dist[i]!);
   const ink = median(strong) || max;
-  for (let i = 0; i < n; i++) out[i] = Math.min(1, dist[i]! / ink);
+  // Compression noise and faint screenshot edges sit a few % off the background; cutting
+  // the bottom and top 10% symmetrically removes them while the 50% edge stays put.
+  const NOISE = 0.1;
+  for (let i = 0; i < n; i++) out[i] = Math.min(1, Math.max(0, (dist[i]! / ink - NOISE) / (1 - 2 * NOISE)));
   return out;
 }
 
@@ -1386,7 +1389,9 @@ const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
  */
 export function traceSettings(softness: number) {
   const t = Math.min(1, Math.max(0, (softness - 0.9) / 0.5));
-  const s = Math.max(1, softness);
+  // Capped: very blurry uploads (softness 3-6) already have smooth 50% edges, and letting
+  // the settings keep growing (tolerance ~ s²) melted letters into blobs.
+  const s = Math.min(1.3, Math.max(1, softness));
   return {
     /** 0 = crisp art, 1 = clearly soft/resampled. */
     softness: t,
