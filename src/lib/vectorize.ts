@@ -30,6 +30,8 @@ export type VectorizeOptions = {
   fairing?: number;
   /** Arc-length Gaussian smoothing radius (px) for slow edge wobble on noisy sources; 0 = off. */
   outlineSigma?: number;
+  /** Traced pixels per source pixel (upsampled tracing), so tight-bend detection keeps source-pixel scale. */
+  pixelScale?: number;
 };
 
 const DEFAULTS = {
@@ -41,6 +43,7 @@ const DEFAULTS = {
   outlineSmoothing: 8,
   fairing: 0,
   outlineSigma: 0,
+  pixelScale: 1,
 };
 
 /** Separable Gaussian blur; straight edges keep their 50% position, noise averages out. */
@@ -741,7 +744,7 @@ function smoothOutline(pts: Point[], fixed: Set<number>, passes: number) {
  * corner so corners stay put without the hooks fixed-point smoothing leaves beside them,
  * and 2G - G² cancels the first-order shrinkage on curves.
  */
-function gaussianOutline(pts: Point[], corners: number[], sigma: number) {
+function gaussianOutline(pts: Point[], corners: number[], sigma: number, pixelScale = 1) {
   const n = pts.length;
   if (sigma <= 0 || n < 8) return pts;
   const s = new Float64Array(n + 1);
@@ -752,8 +755,8 @@ function gaussianOutline(pts: Point[], corners: number[], sigma: number) {
   for (const c of corners) anchor[c] = 1;
   const cos30 = Math.cos((30 * Math.PI) / 180);
   for (let i = 0; i < n; i++) {
-    const a = norm(sub(pts[i]!, walk(pts, i, 3, -1)));
-    const b = norm(sub(walk(pts, i, 3, 1), pts[i]!));
+    const a = norm(sub(pts[i]!, walk(pts, i, 3 * pixelScale, -1)));
+    const b = norm(sub(walk(pts, i, 3 * pixelScale, 1), pts[i]!));
     if (dot(a, b) < cos30) anchor[i] = 1;
   }
   // Arc distance to the nearest anchor: two sweeps each way around the closed outline.
@@ -809,7 +812,7 @@ function gaussianOutline(pts: Point[], corners: number[], sigma: number) {
 function fitContour(raw: Point[], opts: typeof DEFAULTS): TracedPath {
   const corners = findCorners(raw, opts.cornerAngle);
   const pts = smoothOutline(
-    gaussianOutline(raw, corners, opts.outlineSigma),
+    gaussianOutline(raw, corners, opts.outlineSigma, opts.pixelScale),
     new Set(corners),
     opts.outlineSmoothing,
   );
@@ -1370,9 +1373,30 @@ export function upsampleCoverage(src: Float32Array, width: number, height: numbe
   return out;
 }
 
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+
+/**
+ * Tracing settings in source pixels, ramping smoothly with edge softness. A hard crisp/soft
+ * switch made borderline uploads (softness ≈ 1.2-1.4) flip between clean curves and traced
+ * pixel steps, so every upload now gets smoothing sized to its own edge quality.
+ */
+export function traceSettings(softness: number) {
+  const t = Math.min(1, Math.max(0, (softness - 0.9) / 0.5));
+  const s = Math.max(1, softness);
+  return {
+    tolerance: lerp(0.12, 0.35 * s * s, t),
+    // Even crisp art needs ~0.6px of along-edge smoothing: bicubic upsampling of an
+    // antialiased diagonal leaves a one-pixel-period ripple that the fitter would copy.
+    outlineSigma: lerp(0.6, 3.5 * s, t),
+    fairing: lerp(0.06, 0.35 * s, t),
+    outlineSmoothing: Math.round(lerp(8, 18 * s * s, t)),
+  };
+}
+
 /**
  * Small or low-resolution logos (e.g. thin taglines a few px tall) give the curve fitter too few
  * points, which produces spikes and wobble. Trace a smooth bicubic upsample instead, then scale back.
+ * Smoothing is set in source pixels (see traceSettings) and scaled to the upsampled grid.
  */
 export function vectorizeDetailed(
   coverage: Float32Array,
@@ -1381,24 +1405,19 @@ export function vectorizeDetailed(
   options: VectorizeOptions = {},
   targetLongSide = 3000,
 ): TracedPath[] {
-  // Blurry / resampled uploads have wide, uneven edge ramps; tracing them tightly turns that
-  // noise into scalloped edges, so fit looser and smooth harder instead of upsampling.
-  const softness = edgeSoftness(coverage, width, height);
-  if (softness > 1.3) {
-    return vectorize(coverage, width, height, {
-      tolerance: 0.35 * softness * softness,
-      outlineSmoothing: Math.round(18 * softness * softness),
-      // Resampled screenshots wobble slowly (10-30px period) along long edges: blur along
-      // the outline at that scale, then merge any curves that still meet smoothly.
-      outlineSigma: 3.5 * softness,
-      fairing: 0.35 * softness,
-      ...options,
-    });
-  }
+  const set = traceSettings(edgeSoftness(coverage, width, height));
   const k = Math.max(1, Math.min(6, Math.floor(targetLongSide / Math.max(width, height))));
-  if (k === 1) return vectorize(coverage, width, height, options);
-  const minArea = (options.minArea ?? DEFAULTS.minArea) * k * k;
-  const paths = vectorize(upsampleCoverage(coverage, width, height, k), width * k, height * k, { ...options, minArea });
+  const opts: VectorizeOptions = {
+    tolerance: set.tolerance * k,
+    outlineSigma: set.outlineSigma * k,
+    fairing: set.fairing * k,
+    outlineSmoothing: set.outlineSmoothing,
+    pixelScale: k,
+    ...options,
+    minArea: (options.minArea ?? DEFAULTS.minArea) * k * k,
+  };
+  if (k === 1) return vectorize(coverage, width, height, opts);
+  const paths = vectorize(upsampleCoverage(coverage, width, height, k), width * k, height * k, opts);
   const s = (p: Point): Point => ({ x: p.x / k, y: p.y / k });
   return paths.map((p) => ({
     start: s(p.start),
