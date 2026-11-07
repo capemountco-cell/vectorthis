@@ -1391,9 +1391,9 @@ export function traceSettings(softness: number) {
     /** 0 = crisp art, 1 = clearly soft/resampled. */
     softness: t,
     tolerance: lerp(0.12, 0.35 * s * s, t),
-    // Even crisp art needs ~0.6px of along-edge smoothing: bicubic upsampling of an
+    // Even crisp art needs ~1px of along-edge smoothing: bicubic upsampling of an
     // antialiased diagonal leaves a one-pixel-period ripple that the fitter would copy.
-    outlineSigma: lerp(0.6, 3.5 * s, t),
+    outlineSigma: lerp(1.2, 3.5 * s, t),
     fairing: lerp(0.06, 0.35 * s, t),
     outlineSmoothing: Math.round(lerp(8, 18 * s * s, t)),
   };
@@ -1412,7 +1412,10 @@ export function vectorizeDetailed(
   targetLongSide = 3000,
 ): TracedPath[] {
   const set = traceSettings(edgeSoftness(coverage, width, height));
-  const k = Math.max(1, Math.min(6, Math.floor(targetLongSide / Math.max(width, height))));
+  // Clearly soft sources already have wide edge ramps: upsampling them only turns their
+  // pixel steps into extra outline detail, so they are traced at source resolution.
+  const k =
+    set.softness >= 1 ? 1 : Math.max(1, Math.min(6, Math.floor(targetLongSide / Math.max(width, height))));
   const opts: VectorizeOptions = {
     tolerance: set.tolerance * k,
     outlineSigma: set.outlineSigma * k,
