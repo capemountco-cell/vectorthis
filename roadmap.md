@@ -11,3 +11,4 @@
 - [x] Rebuild the UI to the approved redesign: dotted start card with mode cards, step-by-step processing, result workspace (Artwork / Outlines / Compare / Code, background, zoom, accuracy + stats, SVG/PNG export with sizes), mobile save sheet, batch with download-all, recent logos on device; Exact trace is the default.
 - [x] Delete logos from Recent: a × on each tile and Clear all with a confirm step.
 - [x] Rename the "Recreate" mode to "AI Trace" in the UI (internal mode id stays "recreate").
+- [x] Fix blurry/compressed uploads (FLOW logo): ignore background speckle, cap smoothing, score shape match at the ink edge (67% → 97%).
