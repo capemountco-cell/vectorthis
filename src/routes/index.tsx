@@ -257,6 +257,7 @@ function Index() {
 
   return (
     <div className="flex min-h-dvh flex-col bg-dots">
+      {pageDragging && <PageDropOverlay label="Drop your logo to upload" />}
       <header className="flex flex-wrap items-center justify-between gap-3 px-4 py-4 sm:px-7">
         <button type="button" onClick={() => setBatch(false)} className="flex items-center gap-2.5 text-foreground" aria-label="Vectorthis home">
           <BrandMark />

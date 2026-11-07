@@ -56,6 +56,7 @@ export function BatchLogos({ mode, onMode }: { mode: TaskMode; onMode: (mode: Ta
 
   return (
     <main className="flex flex-1 flex-col gap-4 px-4 pb-10 sm:px-7">
+      {pageDragging && <PageDropOverlay label="Drop logos to add them" />}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold tracking-[-0.01em]">Batch</h1>
