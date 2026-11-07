@@ -30,6 +30,10 @@ export type VectorizeOptions = {
   fairing?: number;
   /** Arc-length Gaussian smoothing radius (px) for slow edge wobble on noisy sources; 0 = off. */
   outlineSigma?: number;
+  /** Traced pixels per source pixel (upsampled tracing), so tight-bend detection keeps source-pixel scale. */
+  pixelScale?: number;
+  /** Multiplies the corner detection/sharpening distances (px); >1 ignores pixel steps of upsampled soft sources. */
+  cornerScale?: number;
 };
 
 const DEFAULTS = {
@@ -41,6 +45,8 @@ const DEFAULTS = {
   outlineSmoothing: 8,
   fairing: 0,
   outlineSigma: 0,
+  pixelScale: 1,
+  cornerScale: 1,
 };
 
 /** Separable Gaussian blur; straight edges keep their 50% position, noise averages out. */
@@ -335,10 +341,10 @@ function walk(pts: Point[], i: number, dist: number, dir: 1 | -1): Point {
   return cur;
 }
 
-function findCorners(pts: Point[], cornerAngle: number): number[] {
+function findCorners(pts: Point[], cornerAngle: number, scale = 1): number[] {
   const n = pts.length;
   if (n < 8) return [];
-  const window = 2.5;
+  const window = 2.5 * scale;
   const turnAt = (i: number, w: number) => {
     const a = norm(sub(pts[i]!, walk(pts, i, w, -1)));
     const b = norm(sub(walk(pts, i, w, 1), pts[i]!));
@@ -393,7 +399,7 @@ function fitLine(points: Point[]) {
 }
 
 /** Moves a rounded-off corner point to where its two neighbouring edges meet. */
-function sharpenCorner(pts: Point[], i: number, prevCorner: number, nextCorner: number): Point {
+function sharpenCorner(pts: Point[], i: number, prevCorner: number, nextCorner: number, scale = 1): Point {
   const n = pts.length;
   const collect = (dir: 1 | -1, limit: number) => {
     const out: Point[] = [];
@@ -402,8 +408,8 @@ function sharpenCorner(pts: Point[], i: number, prevCorner: number, nextCorner: 
       const a = pts[(i + dir * (k - 1) + n * k) % n]!,
         b = pts[(i + dir * k + n * k) % n]!;
       acc += len(sub(b, a));
-      if (acc > 7) break;
-      if (acc >= 1.2) out.push(b);
+      if (acc > 7 * scale) break;
+      if (acc >= 1.2 * scale) out.push(b);
     }
     return out;
   };
@@ -417,7 +423,7 @@ function sharpenCorner(pts: Point[], i: number, prevCorner: number, nextCorner: 
   if (Math.abs(cross) < 0.25) return p;
   const t = ((l2.c.x - l1.c.x) * l2.d.y - (l2.c.y - l1.c.y) * l2.d.x) / cross;
   const hit = add(l1.c, mul(l1.d, t));
-  return len(sub(hit, p)) <= 2.5 ? hit : p;
+  return len(sub(hit, p)) <= 2.5 * scale ? hit : p;
 }
 
 // ---------- 3. Curve fitting (Schneider) ----------
@@ -741,7 +747,7 @@ function smoothOutline(pts: Point[], fixed: Set<number>, passes: number) {
  * corner so corners stay put without the hooks fixed-point smoothing leaves beside them,
  * and 2G - G² cancels the first-order shrinkage on curves.
  */
-function gaussianOutline(pts: Point[], corners: number[], sigma: number) {
+function gaussianOutline(pts: Point[], corners: number[], sigma: number, pixelScale = 1) {
   const n = pts.length;
   if (sigma <= 0 || n < 8) return pts;
   const s = new Float64Array(n + 1);
@@ -752,8 +758,8 @@ function gaussianOutline(pts: Point[], corners: number[], sigma: number) {
   for (const c of corners) anchor[c] = 1;
   const cos30 = Math.cos((30 * Math.PI) / 180);
   for (let i = 0; i < n; i++) {
-    const a = norm(sub(pts[i]!, walk(pts, i, 3, -1)));
-    const b = norm(sub(walk(pts, i, 3, 1), pts[i]!));
+    const a = norm(sub(pts[i]!, walk(pts, i, 3 * pixelScale, -1)));
+    const b = norm(sub(walk(pts, i, 3 * pixelScale, 1), pts[i]!));
     if (dot(a, b) < cos30) anchor[i] = 1;
   }
   // Arc distance to the nearest anchor: two sweeps each way around the closed outline.
@@ -807,9 +813,9 @@ function gaussianOutline(pts: Point[], corners: number[], sigma: number) {
 }
 
 function fitContour(raw: Point[], opts: typeof DEFAULTS): TracedPath {
-  const corners = findCorners(raw, opts.cornerAngle);
+  const corners = findCorners(raw, opts.cornerAngle, opts.cornerScale);
   const pts = smoothOutline(
-    gaussianOutline(raw, corners, opts.outlineSigma),
+    gaussianOutline(raw, corners, opts.outlineSigma, opts.pixelScale),
     new Set(corners),
     opts.outlineSmoothing,
   );
@@ -845,6 +851,7 @@ function fitContour(raw: Point[], opts: typeof DEFAULTS): TracedPath {
       ci,
       corners[(k - 1 + corners.length) % corners.length]!,
       corners[(k + 1) % corners.length]!,
+      opts.cornerScale,
     ),
   );
   corners.forEach((ci, k) => {
@@ -865,7 +872,7 @@ function fitContour(raw: Point[], opts: typeof DEFAULTS): TracedPath {
       (p, idx) =>
         idx === 0 ||
         idx === run.length - 1 ||
-        (len(sub(p, run[0]!)) > 1.2 && len(sub(p, run[run.length - 1]!)) > 1.2),
+        (len(sub(p, run[0]!)) > 1.2 * opts.cornerScale && len(sub(p, run[run.length - 1]!)) > 1.2 * opts.cornerScale),
     );
     fitRun(
       trimmed.length >= 2 ? trimmed : [run[0]!, run[run.length - 1]!],
@@ -1370,9 +1377,32 @@ export function upsampleCoverage(src: Float32Array, width: number, height: numbe
   return out;
 }
 
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+
+/**
+ * Tracing settings in source pixels, ramping smoothly with edge softness. A hard crisp/soft
+ * switch made borderline uploads (softness ≈ 1.2-1.4) flip between clean curves and traced
+ * pixel steps, so every upload now gets smoothing sized to its own edge quality.
+ */
+export function traceSettings(softness: number) {
+  const t = Math.min(1, Math.max(0, (softness - 0.9) / 0.5));
+  const s = Math.max(1, softness);
+  return {
+    /** 0 = crisp art, 1 = clearly soft/resampled. */
+    softness: t,
+    tolerance: lerp(0.12, 0.35 * s * s, t),
+    // Even crisp art needs ~1px of along-edge smoothing: bicubic upsampling of an
+    // antialiased diagonal leaves a one-pixel-period ripple that the fitter would copy.
+    outlineSigma: lerp(1.2, 3.5 * s, t),
+    fairing: lerp(0.06, 0.35 * s, t),
+    outlineSmoothing: Math.round(lerp(8, 18 * s * s, t)),
+  };
+}
+
 /**
  * Small or low-resolution logos (e.g. thin taglines a few px tall) give the curve fitter too few
  * points, which produces spikes and wobble. Trace a smooth bicubic upsample instead, then scale back.
+ * Smoothing is set in source pixels (see traceSettings) and scaled to the upsampled grid.
  */
 export function vectorizeDetailed(
   coverage: Float32Array,
@@ -1381,24 +1411,25 @@ export function vectorizeDetailed(
   options: VectorizeOptions = {},
   targetLongSide = 3000,
 ): TracedPath[] {
-  // Blurry / resampled uploads have wide, uneven edge ramps; tracing them tightly turns that
-  // noise into scalloped edges, so fit looser and smooth harder instead of upsampling.
-  const softness = edgeSoftness(coverage, width, height);
-  if (softness > 1.3) {
-    return vectorize(coverage, width, height, {
-      tolerance: 0.35 * softness * softness,
-      outlineSmoothing: Math.round(18 * softness * softness),
-      // Resampled screenshots wobble slowly (10-30px period) along long edges: blur along
-      // the outline at that scale, then merge any curves that still meet smoothly.
-      outlineSigma: 3.5 * softness,
-      fairing: 0.35 * softness,
-      ...options,
-    });
-  }
-  const k = Math.max(1, Math.min(6, Math.floor(targetLongSide / Math.max(width, height))));
-  if (k === 1) return vectorize(coverage, width, height, options);
-  const minArea = (options.minArea ?? DEFAULTS.minArea) * k * k;
-  const paths = vectorize(upsampleCoverage(coverage, width, height, k), width * k, height * k, { ...options, minArea });
+  const set = traceSettings(edgeSoftness(coverage, width, height));
+  // Clearly soft sources already have wide edge ramps: upsampling them only turns their
+  // pixel steps into extra outline detail, so they are traced at source resolution.
+  const k =
+    set.softness >= 1 ? 1 : Math.max(1, Math.min(6, Math.floor(targetLongSide / Math.max(width, height))));
+  const opts: VectorizeOptions = {
+    tolerance: set.tolerance * k,
+    outlineSigma: set.outlineSigma * k,
+    fairing: set.fairing * k,
+    outlineSmoothing: set.outlineSmoothing,
+    pixelScale: k,
+    // Crisp art keeps fine (upsampled-pixel) corner detection for tiny lettering; soft sources
+    // measure corners in source pixels so their pixel steps are not mistaken for corners.
+    cornerScale: lerp(1, k, set.softness),
+    ...options,
+    minArea: (options.minArea ?? DEFAULTS.minArea) * k * k,
+  };
+  if (k === 1) return vectorize(coverage, width, height, opts);
+  const paths = vectorize(upsampleCoverage(coverage, width, height, k), width * k, height * k, opts);
   const s = (p: Point): Point => ({ x: p.x / k, y: p.y / k });
   return paths.map((p) => ({
     start: s(p.start),
