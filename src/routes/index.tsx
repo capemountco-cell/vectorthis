@@ -54,6 +54,12 @@ function Index() {
   const [recent, setRecent] = useState<RecentItem[]>([]);
   const controller = useRef<AbortController | null>(null);
 
+  // Drop an image anywhere on the start screen to upload it.
+  const pageDragging = useWindowImageDrop((files) => {
+    const f = files[0];
+    if (f) chooseFile(f);
+  }, busy || Boolean(result) || batch);
+
   useEffect(() => setRecent(loadRecent()), []);
 
   function chooseFile(f: File) {

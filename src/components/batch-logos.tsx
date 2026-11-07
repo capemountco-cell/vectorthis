@@ -37,6 +37,7 @@ export function BatchLogos({ mode, onMode }: { mode: TaskMode; onMode: (mode: Ta
   }, []);
   const logoDrop = useImageDrop(uploadLogos);
   const shapeDrop = useImageDrop((files) => setShape(files[0] ?? null));
+  const pageDragging = useWindowImageDrop(uploadLogos);
   const readyFiles = Object.values(ready);
 
   // Started straight from the tap so mobile sharing is allowed.
