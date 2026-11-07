@@ -1385,7 +1385,9 @@ export function vectorizeDetailed(
     return vectorize(coverage, width, height, {
       tolerance: 0.35 * softness * softness,
       outlineSmoothing: Math.round(18 * softness * softness),
-      // Smoothing alone leaves slow S-shaped wobble on long gentle edges; merge those curves.
+      // Resampled screenshots wobble slowly (10-30px period) along long edges: blur along
+      // the outline at that scale, then merge any curves that still meet smoothly.
+      outlineSigma: 3.5 * softness,
       fairing: 0.55 * softness,
       ...options,
     });
