@@ -750,11 +750,11 @@ function gaussianOutline(pts: Point[], corners: number[], sigma: number) {
   // those would round them off and the shrink compensation would then overshoot into a hook.
   const anchor = new Uint8Array(n);
   for (const c of corners) anchor[c] = 1;
-  for (let i = 0; i < n; i++) {
-    const a = norm(sub(pts[i]!, walk(pts, i, 3, -1)));
-    const b = norm(sub(walk(pts, i, 3, 1), pts[i]!));
-    if (dot(a, b) < Math.cos((30 * Math.PI) / 180)) anchor[i] = 1;
-  }
+  const bend = (i: number, w: number) =>
+    dot(norm(sub(pts[i]!, walk(pts, i, w, -1))), norm(sub(walk(pts, i, w, 1), pts[i]!)));
+  // A pixel step turns sharply only up close; a real bend still turns when seen from further away.
+  const cos30 = Math.cos((30 * Math.PI) / 180);
+  for (let i = 0; i < n; i++) if (bend(i, 3) < cos30 && bend(i, 6) < cos30) anchor[i] = 1;
   // Arc distance to the nearest anchor: two sweeps each way around the closed outline.
   const dist = new Float64Array(n).fill(Infinity);
   for (let i = 0; i < n; i++) if (anchor[i]) dist[i] = 0;
