@@ -1244,7 +1244,7 @@ function fairCurves(paths: TracedPath[], tol: number, maxAngle = (15 * Math.PI) 
     // Curves as [p0, c1, c2, p3]; lines kept as-is.
     type Item = { kind: "L"; to: Point } | { kind: "C"; c: Point[] };
     let from = p.start;
-    let items: Item[] = p.segments.map((s) => {
+    const items: Item[] = p.segments.map((s) => {
       const it: Item = s.type === "L" ? { kind: "L", to: s.to } : { kind: "C", c: [from, s.c1, s.c2, s.to] };
       from = s.to;
       return it;
@@ -1281,7 +1281,6 @@ function fairCurves(paths: TracedPath[], tol: number, maxAngle = (15 * Math.PI) 
     const segments: Segment[] = items.map((it) =>
       it.kind === "L" ? { type: "L", to: it.to } : { type: "C", c1: it.c[1]!, c2: it.c[2]!, to: it.c[3]! },
     );
-    items = [];
     return { start: p.start, segments };
   });
 }
