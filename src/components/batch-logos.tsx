@@ -6,7 +6,8 @@ import { MODES } from "@/components/app/modes";
 import { Segmented } from "@/components/app/segmented";
 import { downloadFile, isMobileSaveDevice } from "@/lib/save-png";
 import type { TaskMode, TaskOptions } from "@/lib/logo-task";
-import { useImageDrop } from "@/hooks/use-image-drop";
+import { useImageDrop, useWindowImageDrop } from "@/hooks/use-image-drop";
+import { PageDropOverlay } from "@/components/app/page-drop-overlay";
 import { cn } from "@/lib/utils";
 
 export function BatchLogos({ mode, onMode }: { mode: TaskMode; onMode: (mode: TaskMode) => void }) {
@@ -36,6 +37,7 @@ export function BatchLogos({ mode, onMode }: { mode: TaskMode; onMode: (mode: Ta
   }, []);
   const logoDrop = useImageDrop(uploadLogos);
   const shapeDrop = useImageDrop((files) => setShape(files[0] ?? null));
+  const pageDragging = useWindowImageDrop(uploadLogos);
   const readyFiles = Object.values(ready);
 
   // Started straight from the tap so mobile sharing is allowed.
@@ -54,6 +56,7 @@ export function BatchLogos({ mode, onMode }: { mode: TaskMode; onMode: (mode: Ta
 
   return (
     <main className="flex flex-1 flex-col gap-4 px-4 pb-10 sm:px-7">
+      {pageDragging && <PageDropOverlay label="Drop logos to add them" />}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold tracking-[-0.01em]">Batch</h1>

@@ -7,6 +7,8 @@ import { baseName, modeInfo } from "@/components/app/modes";
 import { ProcessingScreen } from "@/components/app/processing-screen";
 import { ResultWorkspace, type Version } from "@/components/app/result-workspace";
 import { StartScreen } from "@/components/app/start-screen";
+import { PageDropOverlay } from "@/components/app/page-drop-overlay";
+import { useWindowImageDrop } from "@/hooks/use-image-drop";
 import { toOutputs } from "@/lib/logo-convert";
 import { flattenLogo, logoFile } from "@/lib/logo-files";
 import { DEFAULT_TASK_MODE, readAsDataUrl, type TaskMode } from "@/lib/logo-task";
@@ -51,6 +53,12 @@ function Index() {
   const [versions, setVersions] = useState<Version[]>([]);
   const [recent, setRecent] = useState<RecentItem[]>([]);
   const controller = useRef<AbortController | null>(null);
+
+  // Drop an image anywhere on the start screen to upload it.
+  const pageDragging = useWindowImageDrop((files) => {
+    const f = files[0];
+    if (f) chooseFile(f);
+  }, busy || Boolean(result) || batch);
 
   useEffect(() => setRecent(loadRecent()), []);
 
@@ -249,6 +257,7 @@ function Index() {
 
   return (
     <div className="flex min-h-dvh flex-col bg-dots">
+      {pageDragging && <PageDropOverlay label="Drop your logo to upload" />}
       <header className="flex flex-wrap items-center justify-between gap-3 px-4 py-4 sm:px-7">
         <button type="button" onClick={() => setBatch(false)} className="flex items-center gap-2.5 text-foreground" aria-label="Vectorthis home">
           <BrandMark />
