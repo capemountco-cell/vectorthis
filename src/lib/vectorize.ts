@@ -746,11 +746,6 @@ function gaussianOutline(pts: Point[], corners: number[], sigma: number) {
   if (sigma <= 0 || n < 8) return pts;
   const s = new Float64Array(n + 1);
   for (let i = 1; i <= n; i++) s[i] = s[i - 1]! + len(sub(pts[i % n]!, pts[i - 1]!));
-  const total = s[n]!;
-  const arc = (i: number, j: number) => {
-    const d = Math.abs(s[i]! - s[j]!);
-    return Math.min(d, total - d);
-  };
   // Anchors: real corners plus any tight bend (e.g. a blunt leaf tip) — blurring across
   // those would round them off and the shrink compensation would then overshoot into a hook.
   const anchor = new Uint8Array(n);
@@ -775,7 +770,6 @@ function gaussianOutline(pts: Point[], corners: number[], sigma: number) {
         nx = (k + 1) % n;
       dist[i] = Math.min(dist[i]!, dist[nx]! + (s[k + 1]! - s[k]!));
     }
-  void arc;
   const sig = new Float64Array(n);
   for (let i = 0; i < n; i++) sig[i] = Math.min(sigma, dist[i]! / 3);
   const blur = (src: Point[]) => {
