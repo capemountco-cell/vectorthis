@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { outlineStats, parsePathData, parseSvg } from "@/lib/outline";
 import { pathData, toSvg, type TracedPath } from "@/lib/vectorize";
+import { toLayeredSvg, type ColorLayer } from "@/lib/color-trace";
 
 const square: TracedPath = {
   start: { x: 0, y: 0 },
@@ -55,5 +56,20 @@ describe("outline parsing", () => {
     expect(stats.anchors).toHaveLength(18);
     expect(stats.curves).toBe(2);
     expect(stats.shapes).toBe(2);
+  });
+
+  it("reads colour layers and gradients back from a colour SVG", () => {
+    const layers: ColorLayer[] = [
+      { paths: [square], fill: { type: "solid", color: "#e6194b" } },
+      { paths: [hole], fill: { type: "linear", x1: 1, y1: 2, x2: 30, y2: 4.5, stops: [{ offset: 0.03, color: "#2d6115" }, { offset: 0.97, color: "#69a00d" }] } },
+    ];
+    const parsed = parseSvg(toLayeredSvg(layers, 40, 40));
+    expect(parsed.layers).toEqual(layers);
+    expect(parsed.paths).toEqual([square, hole]);
+  });
+
+  it("never trusts foreign fills: anything but a hex colour or own gradient reads as black", () => {
+    const svg = '<svg viewBox="0 0 10 10"><path fill="url(javascript:alert(1))" d="M0 0L5 0L5 5Z"/><path fill="red" d="M1 1L4 1L4 4Z"/></svg>';
+    expect(parseSvg(svg).layers.map((l) => l.fill)).toEqual([{ type: "solid", color: "#000000" }, { type: "solid", color: "#000000" }]);
   });
 });

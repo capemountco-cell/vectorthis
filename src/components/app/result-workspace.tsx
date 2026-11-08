@@ -4,7 +4,7 @@ import { Drawer, DrawerContent, DrawerDescription, DrawerTitle } from "@/compone
 import { renderPngPair } from "@/lib/logo-convert";
 import { saveLogoSvg } from "@/lib/logo-files";
 import { outlineStats } from "@/lib/outline";
-import { pngPairFiles, type LogoResult, type PngPair } from "@/lib/result-model";
+import { pngPairFiles, type LogoResult, type PngPair, type Variant } from "@/lib/result-model";
 import { savePng } from "@/lib/save-png";
 import { cn } from "@/lib/utils";
 import { modeInfo } from "./modes";
@@ -24,6 +24,10 @@ type Props = {
   onFix?: ((text: string) => void) | undefined;
   /** A problem from the last action (e.g. a failed re-run). */
   notice?: string | null;
+  /** Switch between black & white and colour (exact traces with their upload only). */
+  onVariant?: ((variant: Variant) => void) | undefined;
+  /** True while the colour version is being traced. */
+  colorBusy?: boolean;
 };
 
 const SIZES = [1024, 2048, 4096] as const;
@@ -43,7 +47,7 @@ function Stat({ label, value, extra }: { label: string; value: string | number; 
 
 const pct = (v: number) => `${(Math.floor(v * 1000) / 10).toFixed(1)}%`;
 
-export function ResultWorkspace({ result, versions, onPickVersion, onNew, onRerun, onFix, notice }: Props) {
+export function ResultWorkspace({ result, versions, onPickVersion, onNew, onRerun, onFix, notice, onVariant, colorBusy }: Props) {
   const [view, setView] = useState<PreviewView>("artwork");
   const [back, setBack] = useState<CanvasBack>("dots");
   const [format, setFormat] = useState<"svg" | "png">("svg");
@@ -58,6 +62,7 @@ export function ResultWorkspace({ result, versions, onPickVersion, onNew, onReru
   const [sheetFormat, setSheetFormat] = useState<Format>("svg");
   const [fix, setFix] = useState("");
   const stats = useMemo(() => outlineStats(result.paths), [result.paths]);
+  const gradientCount = result.layers.filter((l) => l.fill.type === "linear").length;
   const info = modeInfo(result.mode);
 
   // A new result starts over with its own prepared files.
@@ -76,7 +81,7 @@ export function ResultWorkspace({ result, versions, onPickVersion, onNew, onReru
     let live = true;
     setPreparing(true);
     renderPngPair(result.svg, result.view, size)
-      .then((pair) => { if (live) setPrepared((p) => ({ ...p, [size]: pngPairFiles(result.name, size, pair) })); })
+      .then((pair) => { if (live) setPrepared((p) => ({ ...p, [size]: pngPairFiles(result.svgFile.name.replace(/\.svg$/, ""), size, pair) })); })
       .catch(() => { if (live) setSaveError("That PNG size could not be prepared. Try a smaller size."); })
       .finally(() => { if (live) setPreparing(false); });
     return () => { live = false; };
@@ -178,6 +183,49 @@ export function ResultWorkspace({ result, versions, onPickVersion, onNew, onReru
         </section>
 
         <aside aria-label="Details and export" className="flex max-w-full flex-[1_1_300px] flex-col gap-3">
+          {(onVariant || result.advice) && (
+            <section aria-labelledby="colour-h" className="flex flex-col gap-3 rounded-[18px] border border-border bg-card p-[18px]">
+              <div className="flex items-center justify-between gap-2">
+                <h2 id="colour-h" className="text-sm font-semibold">Colour</h2>
+                {result.advice && (
+                  <span className={cn("rounded-md px-2 py-1 font-mono text-[11px]", result.advice.recommend === "color" ? "bg-foreground text-primary-foreground" : "bg-muted text-subtle")}>
+                    {result.advice.recommend === "color" ? "KEEP COLOUR" : "B&W IS FINE"}
+                  </span>
+                )}
+              </div>
+              {result.advice && (
+                <>
+                  <p className="text-[13px] leading-snug text-subtle">{result.advice.reason}</p>
+                  <div className="flex items-center gap-3">
+                    <div className="flex -space-x-1" aria-label={`Colours found: ${result.advice.palette.join(", ") || "none"}`}>
+                      {result.advice.palette.map((c) => (
+                        <span key={c} className="h-6 w-6 rounded-full border-2 border-card" style={{ background: c }} title={c} />
+                      ))}
+                    </div>
+                    <div className="flex flex-1 items-center gap-2">
+                      <div aria-hidden="true" className="h-1.5 flex-1 overflow-hidden rounded-full bg-[#EDEDEA]">
+                        <div className="h-full bg-foreground" style={{ width: `${result.advice.score}%` }} />
+                      </div>
+                      <span className="font-mono text-[11px] text-muted-foreground" title="How much is lost in black & white">{result.advice.score}/100</span>
+                    </div>
+                  </div>
+                </>
+              )}
+              {onVariant && (
+                <Segmented
+                  label="Output colour"
+                  value={result.variant}
+                  disabled={Boolean(colorBusy)}
+                  onChange={(v) => onVariant(v)}
+                  options={[
+                    { value: "mono", label: "Black & white" },
+                    { value: "color", label: colorBusy ? "Tracing colour…" : "Colour" },
+                  ]}
+                />
+              )}
+            </section>
+          )}
+
           <section className={cn("flex flex-col gap-3.5 rounded-[18px] border p-[18px]", drifted ? "border-warn-border bg-warn-bg" : "border-border bg-card")}>
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold">{result.accuracy?.kind === "shape" ? "Shape match" : "Accuracy"}</h2>
@@ -188,7 +236,7 @@ export function ResultWorkspace({ result, versions, onPickVersion, onNew, onReru
                 <div className="flex items-baseline gap-2">
                   <span className={cn("text-[40px] font-semibold tracking-[-0.03em]", drifted && "text-warn")}>{pct(result.accuracy.value)}</span>
                   <span className={cn("text-[13px]", drifted ? "text-warn" : "text-muted-foreground")}>
-                    {result.accuracy.kind === "pixel" ? "pixel match with your file" : "match with your original"}
+                    {result.accuracy.kind === "pixel" ? "pixel match with your file" : result.accuracy.kind === "color" ? "colour match with your file" : "match with your original"}
                   </span>
                 </div>
                 <div aria-hidden="true" className="h-1.5 overflow-hidden rounded-full bg-[#EDEDEA]">
@@ -276,7 +324,11 @@ export function ResultWorkspace({ result, versions, onPickVersion, onNew, onReru
               {format === "png" && preparing ? "Preparing PNG…" : format === "png" ? "Download PNG" : "Download SVG"}
             </button>
             <p className="text-center text-xs text-muted-foreground">
-              {format === "png" ? "Rendered from the vector, so it stays crisp at any size." : "One clean path · opens in Figma, Illustrator and Canva."}
+              {format === "png"
+                ? "Rendered from the vector, so it stays crisp at any size."
+                : result.variant === "color"
+                  ? `${result.layers.length} colour shapes${gradientCount ? `, ${gradientCount} gradients` : ""} · opens in Figma, Illustrator and Canva.`
+                  : "One clean path · opens in Figma, Illustrator and Canva."}
             </p>
             {saveError && <p role="alert" className="text-[13px] text-destructive">{saveError}</p>}
           </section>

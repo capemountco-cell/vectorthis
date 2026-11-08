@@ -9,7 +9,7 @@ import { ResultWorkspace, type Version } from "@/components/app/result-workspace
 import { StartScreen } from "@/components/app/start-screen";
 import { PageDropOverlay } from "@/components/app/page-drop-overlay";
 import { useWindowImageDrop } from "@/hooks/use-image-drop";
-import { toOutputs } from "@/lib/logo-convert";
+import { toColorOutputs, toOutputs } from "@/lib/logo-convert";
 import { flattenLogo, logoFile } from "@/lib/logo-files";
 import { DEFAULT_TASK_MODE, readAsDataUrl, type TaskMode } from "@/lib/logo-task";
 import { addRecent, clearRecent, loadRecent, removeRecent, type RecentItem } from "@/lib/recent";
@@ -53,6 +53,9 @@ function Index() {
   const [versions, setVersions] = useState<Version[]>([]);
   const [recent, setRecent] = useState<RecentItem[]>([]);
   const controller = useRef<AbortController | null>(null);
+  // Exact-trace source and both of its versions, so switching colour is instant after the first time.
+  const traced = useRef<{ src: string; mono: LogoResult; color?: LogoResult } | null>(null);
+  const [colorBusy, setColorBusy] = useState(false);
 
   // Drop an image anywhere on the start screen to upload it.
   const pageDragging = useWindowImageDrop((files) => {
@@ -96,6 +99,7 @@ function Index() {
     const accuracy = m === "trace" ? { kind: "pixel" as const, value: o.accuracy } : match !== null ? { kind: "shape" as const, value: match } : null;
     const detail = m === "trace" ? `${o.source.width} × ${o.source.height}${o.source.transparent ? " · transparent" : ""}` : modeInfo(m).ai ? "AI redraw" : "";
     const next = buildResult(o, { name, mode: m, accuracy, original, detail });
+    traced.current = m === "trace" ? { src, mono: next } : null;
     setResult(next);
     setRecent(addRecent({ name, mode: m, svg: o.svg }));
     return match;
@@ -187,6 +191,37 @@ function Index() {
     }
   }
 
+  /** Black & white is the default; colour is traced on first request, then kept. */
+  async function chooseVariant(variant: "mono" | "color") {
+    const t = traced.current;
+    if (!t || colorBusy) return;
+    if (variant === "mono") { setResult(t.mono); return; }
+    if (t.color) { setResult(t.color); return; }
+    setColorBusy(true);
+    setError(null);
+    try {
+      // Let the button show its busy state before the (synchronous) colour trace runs.
+      await new Promise((r) => setTimeout(r, 30));
+      const o = await toColorOutputs(t.src);
+      const color = buildResult(o, {
+        name: t.mono.name,
+        mode: "trace",
+        accuracy: { kind: "color", value: o.accuracy },
+        original: t.mono.original,
+        detail: `${t.mono.detail} · colour`,
+        variant: "color",
+      });
+      if (traced.current !== t) return; // a new upload replaced this one meanwhile
+      t.color = color;
+      setResult(color);
+      setRecent(addRecent({ name: t.mono.name, mode: "trace", svg: o.svg }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The colour version could not be made.");
+    } finally {
+      setColorBusy(false);
+    }
+  }
+
   function cancel() {
     controller.current?.abort();
     controller.current = null;
@@ -220,6 +255,7 @@ function Index() {
 
   async function openRecent(item: RecentItem) {
     try {
+      traced.current = null; // Recent keeps the SVG only, not the upload to re-trace
       setResult(await resultFromRecent(item));
       setVersions([]);
       setRaw(null);
@@ -251,6 +287,8 @@ function Index() {
         onRerun={file ? rerun : undefined}
         onFix={raw && result.mode !== "trace" ? (fix) => void run({ m: result.mode, correction: fix }) : undefined}
         notice={error}
+        onVariant={traced.current && result.mode === "trace" ? (v) => void chooseVariant(v) : undefined}
+        colorBusy={colorBusy}
       />
     );
   }
