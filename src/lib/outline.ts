@@ -1,5 +1,6 @@
 // Pure helpers for showing a traced SVG's structure (no DOM).
 import type { Point, Segment, TracedPath } from "@/lib/vectorize";
+import type { ColorLayer, Fill } from "@/lib/color-trace";
 
 export type ViewBox = { x: number; y: number; width: number; height: number };
 
@@ -38,11 +39,38 @@ export function parsePathData(d: string): TracedPath[] {
   return paths.filter((p) => p.segments.length > 0);
 }
 
-export function parseSvg(svg: string): { paths: TracedPath[]; view: ViewBox | null } {
+const HEX = /^#[0-9a-f]{6}$/i;
+const attr = (tag: string, name: string) => tag.match(new RegExp(`\\s${name}="([^"]*)"`))?.[1];
+
+/**
+ * Reads back an SVG this app wrote: viewBox, and each path's outline and fill (a hex
+ * colour or one of its own linear gradients). Anything else is ignored, never rendered.
+ */
+export function parseSvg(svg: string): { paths: TracedPath[]; view: ViewBox | null; layers: ColorLayer[] } {
   const vb = svg.match(/viewBox="([^"]+)"/)?.[1]?.trim().split(/[\s,]+/).map(Number);
   const view = vb && vb.length === 4 && vb.every(Number.isFinite) ? { x: vb[0]!, y: vb[1]!, width: vb[2]!, height: vb[3]! } : null;
-  const ds = [...svg.matchAll(/\sd="([^"]+)"/g)].map((m) => m[1]!);
-  return { paths: ds.flatMap(parsePathData), view };
+  const gradients = new Map<string, Fill>();
+  for (const m of svg.matchAll(/<linearGradient([^>]*)>([\s\S]*?)<\/linearGradient>/g)) {
+    const tag = m[1]!, id = attr(tag, "id");
+    const n = (k: string) => Number(attr(tag, k));
+    const stops = [...m[2]!.matchAll(/<stop([^>]*)\/?>/g)]
+      .map((st) => ({ offset: Number(attr(st[1]!, "offset")), color: attr(st[1]!, "stop-color") ?? "" }))
+      .filter((st) => Number.isFinite(st.offset) && HEX.test(st.color));
+    if (id && stops.length && ["x1", "y1", "x2", "y2"].every((k) => Number.isFinite(n(k))))
+      gradients.set(id, { type: "linear", x1: n("x1"), y1: n("y1"), x2: n("x2"), y2: n("y2"), stops });
+  }
+  const layers: ColorLayer[] = [];
+  for (const m of svg.matchAll(/<path([^>]*)\/?>/g)) {
+    const tag = m[1]!, d = attr(tag, "d");
+    if (!d) continue;
+    const paths = parsePathData(d);
+    if (!paths.length) continue;
+    const f = attr(tag, "fill") ?? "#000000";
+    const ref = f.match(/^url\(#([^)]+)\)$/)?.[1];
+    const fill: Fill = ref && gradients.has(ref) ? gradients.get(ref)! : { type: "solid", color: HEX.test(f) ? f : "#000000" };
+    layers.push({ paths, fill });
+  }
+  return { paths: layers.flatMap((l) => l.paths), view, layers };
 }
 
 function area(path: TracedPath) {

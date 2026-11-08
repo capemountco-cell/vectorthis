@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { Copy, Minus, Plus } from "lucide-react";
 import { outlineStats } from "@/lib/outline";
 import type { LogoResult } from "@/lib/result-model";
@@ -19,13 +19,38 @@ function backClass(back: CanvasBack) {
   return back === "black" ? "bg-[#111111]" : back === "white" ? "bg-white" : "bg-dots-light";
 }
 
-/** The logo itself, drawn from the parsed outline (never from injected markup). */
+/**
+ * The logo itself, drawn from its parsed layers (never from injected markup). Black & white
+ * results take `ink` so they stay visible on a black canvas; colour results keep their fills.
+ */
 function Vector({ result, ink, className }: { result: LogoResult; ink: string; className?: string }) {
-  const d = useMemo(() => pathData(result.paths), [result.paths]);
+  const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
+  const layers = useMemo(() => result.layers.map((l) => ({ d: pathData(l.paths), fill: l.fill })), [result.layers]);
   const v = result.view;
+  const mono = result.variant === "mono";
   return (
     <svg viewBox={`${v.x} ${v.y} ${v.width} ${v.height}`} className={className} role="img" aria-label={`${result.name} vector`}>
-      <path d={d} fill={ink} fillRule="evenodd" />
+      {!mono && (
+        <defs>
+          {layers.map((l, i) =>
+            l.fill.type === "linear" ? (
+              <linearGradient key={i} id={`${uid}g${i}`} gradientUnits="userSpaceOnUse" x1={l.fill.x1} y1={l.fill.y1} x2={l.fill.x2} y2={l.fill.y2}>
+                {l.fill.stops.map((st, k) => (
+                  <stop key={k} offset={st.offset} stopColor={st.color} />
+                ))}
+              </linearGradient>
+            ) : null,
+          )}
+        </defs>
+      )}
+      {layers.map((l, i) => (
+        <path
+          key={i}
+          d={l.d}
+          fill={mono ? ink : l.fill.type === "solid" ? l.fill.color : `url(#${uid}g${i})`}
+          fillRule="evenodd"
+        />
+      ))}
     </svg>
   );
 }

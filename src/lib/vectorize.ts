@@ -1419,11 +1419,29 @@ export function vectorizeDetailed(
   options: VectorizeOptions = {},
   targetLongSide = 3000,
 ): TracedPath[] {
-  const set = traceSettings(edgeSoftness(coverage, width, height));
+  const softness = edgeSoftness(coverage, width, height);
+  const set = traceSettings(softness);
   // Clearly soft sources already have wide edge ramps: upsampling them only turns their
   // pixel steps into extra outline detail, so they are traced at source resolution.
   const k =
     set.softness >= 1 ? 1 : Math.max(1, Math.min(6, Math.floor(targetLongSide / Math.max(width, height))));
+  return vectorizeScaled(coverage, width, height, k, softness, options);
+}
+
+/**
+ * The detailed tracer with the upsampling factor and edge softness given, so several
+ * coverage maps cut from one image (colour regions) share one scale and one set of settings
+ * and their shared edges stay consistent.
+ */
+export function vectorizeScaled(
+  coverage: Float32Array,
+  width: number,
+  height: number,
+  k: number,
+  softness: number,
+  options: VectorizeOptions = {},
+): TracedPath[] {
+  const set = traceSettings(softness);
   const opts: VectorizeOptions = {
     tolerance: set.tolerance * k,
     outlineSigma: set.outlineSigma * k,
