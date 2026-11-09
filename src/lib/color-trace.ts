@@ -79,11 +79,15 @@ export type Segmentation = {
   alpha: Float32Array;
   rgb: Float32Array;
   lab: Float32Array;
+  bgRgb: [number, number, number];
 };
 
-const STEP = 6; // max colour step (ΔE) between neighbours inside one region
+const STEP = 5; // max colour step (ΔE) between neighbours inside one region
 const SPREAD = 110; // max distance (ΔE) from the region's running mean (wide enough for long gradients)
-const TRAIL = 9; // max distance (ΔE) from the trail colour the region grew along
+const TRAIL = 8; // max distance (ΔE) from the trail colour the region grew along
+const TRAIL_FOLLOW = 0.4; // how fast the trail follows (higher = shorter lag behind a soft edge)
+const BG_FLOOD = 14; // background flood from the border: max ΔE from the background colour
+const BG_ANY = 5; // anywhere in the image: this close to the background colour is background
 const BG_DE = 12; // regions this close to the background colour are background
 
 export function segment(rgba: Uint8ClampedArray, width: number, height: number): Segmentation {
@@ -117,6 +121,38 @@ export function segment(rgba: Uint8ClampedArray, width: number, height: number):
   const trail = new Float32Array(n * 3);
   const regions = new Map<number, Region>();
   let next = 1;
+
+  // Background first (opaque images): flood in from the border over pixels close to the
+  // background colour, plus near-exact background colour anywhere (enclosed gaps). Ink
+  // regions then grow only among what is left, so a soft edge can never merge a shape into
+  // the background, or the background into a shape.
+  if (!transparent) {
+    const id = next++;
+    const near = (i: number) => Math.hypot(lab[i * 3]! - bgLab[0], lab[i * 3 + 1]! - bgLab[1], lab[i * 3 + 2]! - bgLab[2]);
+    let head = 0, tail = 0, area = 0;
+    let x0 = width, y0 = height, x1 = -1, y1 = -1;
+    const seed = (i: number) => {
+      if (labels[i] !== -2 || near(i) > BG_FLOOD) return;
+      labels[i] = id;
+      queue[tail++] = i;
+    };
+    for (let x = 0; x < width; x++) { seed(x); seed((height - 1) * width + x); }
+    for (let y = 0; y < height; y++) { seed(y * width); seed(y * width + width - 1); }
+    for (let i = 0; i < n; i++) if (labels[i] === -2 && near(i) <= BG_ANY) { labels[i] = id; queue[tail++] = i; }
+    while (head < tail) {
+      const p = queue[head++]!;
+      area++;
+      const x = p % width, y = (p / width) | 0;
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      if (x > 0) seed(p - 1);
+      if (x < width - 1) seed(p + 1);
+      if (y > 0) seed(p - width);
+      if (y < height - 1) seed(p + width);
+    }
+    if (area)
+      regions.set(id, { id, area, lab: bgLab, rgb: bgRgb, x0, y0, x1, y1, background: true, model: { kind: "flat", rgb: bgRgb } });
+  }
+
   for (let s = 0; s < n; s++) {
     if (labels[s] !== -2) continue;
     if (transparent && alpha[s]! < 0.5) { labels[s] = 0; continue; }
@@ -143,7 +179,7 @@ export function segment(rgba: Uint8ClampedArray, width: number, height: number):
         if (Math.hypot(lab[q * 3]! - mL, lab[q * 3 + 1]! - ma, lab[q * 3 + 2]! - mb) > SPREAD) continue;
         labels[q] = id;
         queue[tail++] = q;
-        for (let c = 0; c < 3; c++) trail[q * 3 + c] = 0.75 * trail[p * 3 + c]! + 0.25 * lab[q * 3 + c]!;
+        for (let c = 0; c < 3; c++) trail[q * 3 + c] = (1 - TRAIL_FOLLOW) * trail[p * 3 + c]! + TRAIL_FOLLOW * lab[q * 3 + c]!;
       }
     }
     regions.set(id, {
@@ -164,19 +200,20 @@ export function segment(rgba: Uint8ClampedArray, width: number, height: number):
       rim.set(l, (rim.get(l) ?? 0) + 1);
   }
   // Thickness ≈ area / rim pixels: a real shape is several px thick, a halo is 1–2.
-  const isEdge = (r: Region) => r.area < minArea || r.area / Math.max(1, rim.get(r.id) ?? 1) < 2.2;
+  const isEdge = (r: Region) => !r.background && (r.area < minArea || r.area / Math.max(1, rim.get(r.id) ?? 1) < 2.2);
   for (let i = 0; i < n; i++) {
     const r = regions.get(labels[i]!);
     if (r && isEdge(r)) labels[i] = -1;
   }
   for (const [id, r] of regions) if (isEdge(r)) regions.delete(id);
+  // Any other region that is still background-coloured (e.g. an enclosed off-white patch).
   if (!transparent)
     for (const r of regions.values())
-      if (Math.hypot(r.lab[0] - bgLab[0], r.lab[1] - bgLab[1], r.lab[2] - bgLab[2]) < BG_DE) {
+      if (!r.background && Math.hypot(r.lab[0] - bgLab[0], r.lab[1] - bgLab[1], r.lab[2] - bgLab[2]) < BG_DE) {
         r.background = true;
         r.model = { kind: "flat", rgb: bgRgb };
       }
-  const seg: Segmentation = { width, height, transparent, labels, regions, alpha, rgb, lab };
+  const seg: Segmentation = { width, height, transparent, labels, regions, alpha, rgb, lab, bgRgb };
   for (const r of regions.values()) if (!r.background) r.model = fitModel(seg, r);
   return seg;
 }

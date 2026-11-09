@@ -74,4 +74,24 @@ describe("colour tracing", () => {
     expect(svg).toMatch(/fill="url\(#g\d+\)"/);
     expect(svg).not.toContain("stroke");
   }, 30000);
+
+  it("keeps the white background and every stripe of a soft-edged multi-colour logo", () => {
+    // Regression: the background used to leak through soft edges into the stripes, became one
+    // huge tinted shape and swallowed four stripes.
+    const { width, height, rgba } = decodePng("src/test/fixtures/stripes-logo.png");
+    const { layers, advice } = traceColor(rgba, width, height);
+    expect(layers).toHaveLength(8);
+    const area = (l: (typeof layers)[number]) => {
+      const xs = l.paths.flatMap((p) => [p.start.x, ...p.segments.map((s) => s.to.x)]);
+      const ys = l.paths.flatMap((p) => [p.start.y, ...p.segments.map((s) => s.to.y)]);
+      return (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
+    };
+    // No layer covers (nearly) the whole canvas: the background is never traced as a shape.
+    for (const l of layers) expect(area(l)).toBeLessThan(width * height * 0.6);
+    // Its purple, lilac, gold, greens and orange are all there.
+    const colours = layers.flatMap((l) => (l.fill.type === "solid" ? [l.fill.color] : l.fill.stops.map((s) => s.color)));
+    for (const target of [[127, 78, 142], [225, 171, 77], [45, 88, 42], [187, 106, 43]])
+      expect(colours.some((c) => close(c, target, 30))).toBe(true);
+    expect(advice.recommend).toBe("color");
+  }, 30000);
 });

@@ -13,3 +13,4 @@
 - [x] Rename the "Recreate" mode to "AI Trace" in the UI (internal mode id stays "recreate").
 - [x] Fix blurry/compressed uploads (FLOW logo): ignore background speckle, cap smoothing, score shape match at the ink edge (67% → 97%).
 - [x] Colour and gradients: region-based colour trace with linear gradients, black & white by default, 0–100 colour recommendation with palette, one-tap Colour switch; green-B fixture matches its source at 98.4% (desktop + mobile verified).
+- [x] Fix colour trace on soft-edged multi-colour logos: background is flooded first so it can never swallow stripes; stricter growth; stripes logo regression fixture (99.2% colour match).
