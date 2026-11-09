@@ -1,6 +1,7 @@
 import { useId, useMemo, useState } from "react";
 import { Copy, Minus, Plus } from "lucide-react";
-import { outlineStats } from "@/lib/outline";
+import { outlineStats, type ViewBox } from "@/lib/outline";
+import { BOARD } from "@/lib/board";
 import type { LogoResult } from "@/lib/result-model";
 import { pathData } from "@/lib/vectorize";
 import { cn } from "@/lib/utils";
@@ -23,10 +24,10 @@ function backClass(back: CanvasBack) {
  * The logo itself, drawn from its parsed layers (never from injected markup). Black & white
  * results take `ink` so they stay visible on a black canvas; colour results keep their fills.
  */
-function Vector({ result, ink, className }: { result: LogoResult; ink: string; className?: string }) {
+function Vector({ result, ink, className, frame }: { result: LogoResult; ink: string; className?: string; frame?: ViewBox | undefined }) {
   const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
   const layers = useMemo(() => result.layers.map((l) => ({ d: pathData(l.paths), fill: l.fill })), [result.layers]);
-  const v = result.view;
+  const v = frame ?? result.view;
   const mono = result.variant === "mono";
   return (
     <svg viewBox={`${v.x} ${v.y} ${v.width} ${v.height}`} className={className} role="img" aria-label={`${result.name} vector`}>
@@ -77,7 +78,7 @@ function Outlines({ result, className }: { result: LogoResult; className?: strin
 }
 
 export function PreviewCanvas({
-  result, view, onView, back, onBack, onCopy, copied,
+  result, view, onView, back, onBack, onCopy, copied, board, boardFill = "white",
 }: {
   result: LogoResult;
   view: PreviewView;
@@ -86,6 +87,10 @@ export function PreviewCanvas({
   onBack: (back: CanvasBack) => void;
   onCopy: () => void;
   copied: boolean;
+  /** Show the artwork framed on the export board (the default export). */
+  board?: ViewBox | null | undefined;
+  /** The board's background as it will export: "transparent", "white" or a colour. */
+  boardFill?: string | undefined;
 }) {
   const [zoom, setZoom] = useState(1);
   const zi = ZOOMS.indexOf(zoom);
@@ -152,7 +157,26 @@ export function PreviewCanvas({
       {(view === "artwork" || view === "outlines") && (
         <div className="flex flex-1 items-center justify-center overflow-auto px-6 pt-20 pb-8">
           <div style={{ transform: `scale(${zoom})`, transformOrigin: "center" }} className="transition-transform duration-150 motion-reduce:transition-none">
-            {view === "artwork" ? <Vector result={result} ink={ink} className={art} /> : <Outlines result={result} className={art} />}
+            {view === "artwork" && board ? (
+              <figure className="m-0 flex flex-col items-center gap-2">
+                <div
+                  className={cn(
+                    "relative w-[min(560px,78vw)] overflow-hidden rounded-[4px] shadow-[0_0_0_1px_rgba(17,17,17,0.12),0_12px_32px_rgba(17,17,17,0.08)]",
+                    boardFill === "transparent" ? "checker" : boardFill === "white" ? "bg-white" : "",
+                  )}
+                  style={{ aspectRatio: `${BOARD.width} / ${BOARD.height}`, ...(boardFill.startsWith("#") ? { background: boardFill } : {}) }}
+                >
+                  <Vector result={result} ink="#000000" frame={board} className="absolute inset-0 h-full w-full" />
+                </div>
+                <figcaption className="font-mono text-[11px] text-muted-foreground">
+                  {BOARD.width} × {BOARD.height} board{boardFill === "transparent" ? " · transparent" : boardFill.startsWith("#") ? ` · ${boardFill}` : ""}
+                </figcaption>
+              </figure>
+            ) : view === "artwork" ? (
+              <Vector result={result} ink={ink} className={art} />
+            ) : (
+              <Outlines result={result} className={art} />
+            )}
           </div>
         </div>
       )}
@@ -180,7 +204,7 @@ export function PreviewCanvas({
             <Copy className="h-3.5 w-3.5" aria-hidden="true" />
             {copied ? "Copied" : "Copy"}
           </button>
-          <pre className="max-h-[70vh] flex-1 overflow-auto whitespace-pre-wrap break-all rounded-xl bg-foreground p-5 pr-24 font-mono text-[12.5px] leading-relaxed text-[#E8E8E4]">{result.svg}</pre>
+          <pre className="max-h-[70vh] flex-1 overflow-auto whitespace-pre-wrap break-all rounded-xl bg-foreground p-5 pr-24 font-mono text-[12.5px] leading-relaxed text-[#E8E8E4]">{board ? result.board.svg : result.svg}</pre>
         </div>
       )}
     </div>
