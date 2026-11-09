@@ -94,4 +94,17 @@ describe("colour tracing", () => {
       expect(colours.some((c) => close(c, target, 30))).toBe(true);
     expect(advice.recommend).toBe("color");
   }, 30000);
+
+  it("keeps fine lettering on a coloured background instead of treating it as edge halo", () => {
+    // Regression: "LANDSCAPE GROUP" (small letters, ~3px strokes) was dropped as too small.
+    const { width, height, rgba } = decodePng("src/test/fixtures/benchmark-logo.png");
+    const { layers } = traceColor(rgba, width, height);
+    const shapes = layers.flatMap((l) => l.paths);
+    // Mark (one shape per stripe) + BENCHMARK + LANDSCAPE GROUP letters.
+    expect(shapes.length).toBeGreaterThanOrEqual(30);
+    const lowest = Math.max(...shapes.flatMap((p) => [p.start.y, ...p.segments.map((s) => s.to.y)]));
+    expect(lowest).toBeGreaterThan(830); // the small second line of text is there
+    const white = layers.filter((l) => l.fill.type === "solid" && close(l.fill.color, [252, 253, 253], 20));
+    expect(white.length).toBeGreaterThanOrEqual(20);
+  }, 30000);
 });

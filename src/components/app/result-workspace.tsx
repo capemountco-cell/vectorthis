@@ -4,7 +4,8 @@ import { Drawer, DrawerContent, DrawerDescription, DrawerTitle } from "@/compone
 import { renderPngPair } from "@/lib/logo-convert";
 import { saveLogoSvg } from "@/lib/logo-files";
 import { outlineStats } from "@/lib/outline";
-import { pngPairFiles, type LogoResult, type PngPair, type Variant } from "@/lib/result-model";
+import { pngPairFiles, type Canvas, type LogoResult, type PngPair, type Variant } from "@/lib/result-model";
+import { BOARD } from "@/lib/board";
 import { savePng } from "@/lib/save-png";
 import { cn } from "@/lib/utils";
 import { modeInfo } from "./modes";
@@ -31,7 +32,9 @@ type Props = {
 };
 
 const SIZES = [1024, 2048, 4096] as const;
-type Format = "svg" | "png" | "png-white";
+const BOARD_SIZES = [BOARD.width, BOARD.width * 2, BOARD.width * 3] as const;
+type Format = "svg" | "png" | "png-white" | "png-brand";
+type PngBack = "transparent" | "white" | "brand";
 
 function Stat({ label, value, extra }: { label: string; value: string | number; extra?: string | undefined }) {
   return (
@@ -51,9 +54,10 @@ export function ResultWorkspace({ result, versions, onPickVersion, onNew, onReru
   const [view, setView] = useState<PreviewView>("artwork");
   const [back, setBack] = useState<CanvasBack>("dots");
   const [format, setFormat] = useState<"svg" | "png">("svg");
-  const [pngBack, setPngBack] = useState<"transparent" | "white">("transparent");
-  const [size, setSize] = useState<number>(result.pngs.size);
-  const [prepared, setPrepared] = useState<Record<number, PngPair>>({ [result.pngs.size]: result.pngs });
+  const [canvas, setCanvas] = useState<Canvas>("board");
+  const [pngBack, setPngBack] = useState<PngBack>("transparent");
+  const [sizes, setSizes] = useState<Record<Canvas, number>>({ board: BOARD.width, logo: result.pngs.size });
+  const [prepared, setPrepared] = useState<Record<string, PngPair>>({});
   const [preparing, setPreparing] = useState(false);
   const [copied, setCopied] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -64,50 +68,76 @@ export function ResultWorkspace({ result, versions, onPickVersion, onNew, onReru
   const stats = useMemo(() => outlineStats(result.paths), [result.paths]);
   const gradientCount = result.layers.filter((l) => l.fill.type === "linear").length;
   const info = modeInfo(result.mode);
+  // The brand background (the upload's own colour) only makes sense for colour results.
+  const brand = result.variant === "color" ? result.background : null;
+  const size = sizes[canvas];
+  const key = (c: Canvas, s: number) => `${c}:${s}`;
+  const defaults = (r: LogoResult): Record<string, PngPair> => ({ [key("board", BOARD.width)]: r.board.pngs, [key("logo", r.pngs.size)]: r.pngs });
+  const files = { board: { svg: result.board.svgFile }, logo: { svg: result.svgFile } };
 
   // A new result starts over with its own prepared files.
   useEffect(() => {
-    setPrepared({ [result.pngs.size]: result.pngs });
-    setSize(result.pngs.size);
+    setPrepared(defaults(result));
+    setSizes({ board: BOARD.width, logo: result.pngs.size });
     setSaveError(null);
+    // Colour logos from a coloured upload default to their own brand background (white or light
+    // parts would vanish on white); otherwise transparent, and never a stale brand choice.
+    if (result.variant === "color" && result.background) setPngBack("brand");
+    else setPngBack((b) => (b === "brand" ? "transparent" : b));
   }, [result]);
 
   // Other PNG sizes are rendered when picked, so saving stays a synchronous tap.
   useEffect(() => {
-    if (prepared[size]) {
+    const k = key(canvas, size);
+    if (prepared[k] || !Object.keys(prepared).length) {
       setPreparing(false);
       return;
     }
     let live = true;
     setPreparing(true);
-    renderPngPair(result.svg, result.view, size)
-      .then((pair) => { if (live) setPrepared((p) => ({ ...p, [size]: pngPairFiles(result.svgFile.name.replace(/\.svg$/, ""), size, pair) })); })
+    const src = canvas === "board" ? { svg: result.board.svg, view: result.board.view, name: result.board.svgFile.name, base: BOARD.width } : { svg: result.svg, view: result.view, name: result.svgFile.name, base: result.pngs.size };
+    renderPngPair(src.svg, src.view, size, brand)
+      .then((pair) => { if (live) setPrepared((p) => ({ ...p, [k]: pngPairFiles(src.name.replace(/\.svg$/, ""), size, pair, src.base) })); })
       .catch(() => { if (live) setSaveError("That PNG size could not be prepared. Try a smaller size."); })
       .finally(() => { if (live) setPreparing(false); });
     return () => { live = false; };
-  }, [size, prepared, result]);
+  }, [canvas, size, prepared, result, brand]);
 
+  const svgText = canvas === "board" ? result.board.svg : result.svg;
   const copy = () => {
-    void navigator.clipboard?.writeText(result.svg).then(() => {
+    void navigator.clipboard?.writeText(svgText).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1600);
     }).catch(() => setSaveError("Copy isn't available here. Use Download SVG instead."));
   };
 
   // Must run straight from the tap: mobile sharing refuses a share started after an await.
-  const save = (f: Format, pngs: PngPair | undefined) => {
+  const save = (f: Format, c: Canvas, pngs: PngPair | undefined) => {
     setSaveError(null);
     if (f === "svg") {
-      saveLogoSvg(result.svgFile).catch((e: unknown) => {
+      saveLogoSvg(files[c].svg).catch((e: unknown) => {
         if (!(e instanceof Error && e.name === "AbortError")) setSaveError("The SVG could not be saved. Try again.");
       });
       return;
     }
     if (!pngs) return;
-    const promise = savePng(f === "png-white" ? pngs.whiteFile : pngs.pngFile);
+    const file = f === "png-white" ? pngs.whiteFile : f === "png-brand" ? pngs.brandFile : pngs.pngFile;
+    if (!file) return;
+    const promise = savePng(file);
     setSaving(true);
     promise.catch((e: unknown) => setSaveError(e instanceof Error ? e.message : "Saving failed.")).finally(() => setSaving(false));
   };
+  const sizeOptions = canvas === "board"
+    ? BOARD_SIZES.map((w) => ({ value: String(w), label: `${w}×${Math.round((w * BOARD.height) / BOARD.width)}` }))
+    : SIZES.map((s) => ({ value: String(s), label: String(s) }));
+  // The sheet saves the default size of the chosen canvas (prepared up front for instant sharing).
+  const sheetPngs = canvas === "board" ? prepared[key("board", BOARD.width)] : prepared[key("logo", result.pngs.size)];
+  const sheetDims = canvas === "board" ? `${BOARD.width} × ${BOARD.height} px` : `${result.pngs.size} px`;
+  const backOptions: { value: PngBack; label: string }[] = [
+    { value: "transparent", label: "Transparent" },
+    { value: "white", label: "White" },
+    ...(brand ? [{ value: "brand" as const, label: "Brand" }] : []),
+  ];
 
   const scored = versions.map((v) => v.match).filter((m): m is number => typeof m === "number");
   const best = scored.length > 1 ? Math.max(...scored) : null;
@@ -142,7 +172,7 @@ export function ResultWorkspace({ result, versions, onPickVersion, onNew, onReru
       )}
       <div className="flex flex-1 flex-wrap gap-4 p-3 pb-28 sm:p-4 lg:pb-4">
         <section aria-label="Preview" className="flex min-w-0 flex-[999_1_560px] flex-col gap-3">
-          <PreviewCanvas result={result} view={view} onView={setView} back={back} onBack={setBack} onCopy={copy} copied={copied} />
+          <PreviewCanvas result={result} view={view} onView={setView} back={back} onBack={setBack} onCopy={copy} copied={copied} board={canvas === "board" ? result.board.view : null} boardFill={pngBack === "brand" && brand ? brand : pngBack} />
           <div className="flex flex-wrap items-center justify-between gap-2.5">
             <div className="flex flex-wrap gap-2">
               {onRerun && result.mode === "trace" && (
@@ -301,29 +331,36 @@ export function ResultWorkspace({ result, versions, onPickVersion, onNew, onReru
 
           <section className="hidden flex-col gap-3.5 rounded-[18px] border border-border bg-card p-[18px] lg:flex">
             <h2 className="text-sm font-semibold">Export</h2>
+            <Segmented
+              label="Canvas"
+              value={canvas}
+              onChange={setCanvas}
+              options={[{ value: "board", label: `Board ${BOARD.width}×${BOARD.height}` }, { value: "logo", label: "Logo only" }]}
+            />
             <Segmented label="Format" value={format} onChange={setFormat} options={[{ value: "svg", label: "SVG" }, { value: "png", label: "PNG" }]} />
             {format === "png" && (
               <div className="flex flex-col gap-2.5">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-[13px] text-subtle">Background</span>
-                  <Segmented size="sm" label="PNG background" value={pngBack} onChange={setPngBack} options={[{ value: "transparent", label: "Transparent" }, { value: "white", label: "White" }]} />
+                  <Segmented size="sm" label="PNG background" value={pngBack} onChange={setPngBack} options={backOptions} />
                 </div>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-[13px] text-subtle">Size</span>
-                  <Segmented size="sm" label="PNG size" value={String(size)} onChange={(v) => setSize(Number(v))} options={SIZES.map((s) => ({ value: String(s), label: String(s) }))} />
+                  <Segmented size="sm" label="PNG size" value={String(size)} onChange={(v) => setSizes((s) => ({ ...s, [canvas]: Number(v) }))} options={sizeOptions} />
                 </div>
               </div>
             )}
             <button
               type="button"
-              disabled={(format === "png" && (!prepared[size] || preparing)) || saving}
-              onClick={() => save(format === "svg" ? "svg" : pngBack === "white" ? "png-white" : "png", prepared[size])}
+              disabled={(format === "png" && (!prepared[key(canvas, size)] || preparing)) || saving}
+              onClick={() => save(format === "svg" ? "svg" : pngBack === "white" ? "png-white" : pngBack === "brand" ? "png-brand" : "png", canvas, prepared[key(canvas, size)])}
               className="inline-flex h-[50px] items-center justify-center gap-2.5 rounded-[13px] bg-primary text-[15px] font-semibold text-primary-foreground disabled:opacity-50"
             >
               <Download className="h-[18px] w-[18px]" aria-hidden="true" />
               {format === "png" && preparing ? "Preparing PNG…" : format === "png" ? "Download PNG" : "Download SVG"}
             </button>
             <p className="text-center text-xs text-muted-foreground">
+              {canvas === "board" && <>Centred on a {BOARD.width} × {BOARD.height} board. </>}
               {format === "png"
                 ? "Rendered from the vector, so it stays crisp at any size."
                 : result.variant === "color"
@@ -350,13 +387,22 @@ export function ResultWorkspace({ result, versions, onPickVersion, onNew, onReru
           <div className="flex flex-col gap-4 pt-3">
             <DrawerTitle className="text-lg font-semibold">Save logo</DrawerTitle>
             <DrawerDescription className="sr-only">Choose a format, then save it to Files or Photos.</DrawerDescription>
+            <Segmented
+              label="Canvas"
+              value={canvas}
+              onChange={setCanvas}
+              options={[{ value: "board", label: `Board ${BOARD.width}×${BOARD.height}` }, { value: "logo", label: "Logo only" }]}
+            />
             <fieldset className="flex flex-col gap-2">
               <legend className="mb-2 text-xs font-semibold text-subtle">Format</legend>
-              {([
-                ["svg", "SVG vector", "Infinitely sharp · for Figma, Canva, print"],
-                ["png", "PNG · transparent", `${result.pngs.size} px · for socials and slides`],
-                ["png-white", "PNG · white background", `${result.pngs.size} px · for documents and email`],
-              ] as const).map(([id, title, note]) => (
+              {(
+                [
+                  ["svg", "SVG vector", "Infinitely sharp · for Figma, Canva, print"],
+                  ["png", "PNG · transparent", `${sheetDims} · for socials and slides`],
+                  ["png-white", "PNG · white background", `${sheetDims} · for documents and email`],
+                  ...(brand ? ([["png-brand", "PNG · brand background", `${sheetDims} · on your logo's own colour`]] as const) : []),
+                ] as const
+              ).map(([id, title, note]) => (
                 <label key={id} className={cn("flex min-h-16 cursor-pointer items-center gap-3 rounded-[14px] border px-3.5", sheetFormat === id ? "border-foreground ring-1 ring-foreground" : "border-border")}>
                   <input type="radio" name="save-format" checked={sheetFormat === id} onChange={() => setSheetFormat(id)} className="h-5 w-5 accent-foreground" />
                   <span className="flex flex-1 flex-col gap-0.5">
@@ -366,7 +412,7 @@ export function ResultWorkspace({ result, versions, onPickVersion, onNew, onReru
                 </label>
               ))}
             </fieldset>
-            <button type="button" disabled={saving} onClick={() => save(sheetFormat, result.pngs)} className="inline-flex h-[54px] items-center justify-center gap-2.5 rounded-[15px] bg-primary text-base font-semibold text-primary-foreground disabled:opacity-50">
+            <button type="button" disabled={saving || (sheetFormat !== "svg" && !sheetPngs)} onClick={() => save(sheetFormat, canvas, sheetPngs)} className="inline-flex h-[54px] items-center justify-center gap-2.5 rounded-[15px] bg-primary text-base font-semibold text-primary-foreground disabled:opacity-50">
               <Download className="h-[18px] w-[18px]" aria-hidden="true" />
               {saving ? "Opening save options…" : sheetFormat === "svg" ? "Save SVG" : "Save PNG"}
             </button>

@@ -64,12 +64,13 @@ export function BatchLogoTask({
         const match = job.options?.mode === "recreate" ? shapeMatch(await prepareReference(job.file), converted.signature) : null;
         const name = baseName(job.file.name);
         return {
-          png: converted.png,
+          // Batch saves the default export: the logo centred on the 1300 × 1200 board.
+          png: converted.board.png,
           match,
           accuracy: converted.accuracy,
-          pngFile: logoFile(converted.png, `${name}.png`, "image/png"),
-          whiteFile: logoFile(converted.whitePng, `${name}-white.png`, "image/png"),
-          svgFile: logoFile(converted.svg, `${name}.svg`, "image/svg+xml"),
+          pngFile: logoFile(converted.board.png, `${name}.png`, "image/png"),
+          whiteFile: logoFile(converted.board.whitePng, `${name}-white.png`, "image/png"),
+          svgFile: logoFile(converted.board.svg, `${name}.svg`, "image/svg+xml"),
         };
       },
     }).then((result) => {

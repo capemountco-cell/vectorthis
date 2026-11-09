@@ -14,3 +14,4 @@
 - [x] Fix blurry/compressed uploads (FLOW logo): ignore background speckle, cap smoothing, score shape match at the ink edge (67% → 97%).
 - [x] Colour and gradients: region-based colour trace with linear gradients, black & white by default, 0–100 colour recommendation with palette, one-tap Colour switch; green-B fixture matches its source at 98.4% (desktop + mobile verified).
 - [x] Fix colour trace on soft-edged multi-colour logos: background is flooded first so it can never swallow stripes; stricter growth; stripes logo regression fixture (99.2% colour match).
+- [x] Default exports to a 1300 × 1200 design board with the logo centred in a safe box (Logo only optional), brand-background PNGs for colour logos, and keep fine lettering in colour traces (Benchmark fixture).

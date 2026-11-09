@@ -200,12 +200,59 @@ export function segment(rgba: Uint8ClampedArray, width: number, height: number):
       rim.set(l, (rim.get(l) ?? 0) + 1);
   }
   // Thickness ≈ area / rim pixels: a real shape is several px thick, a halo is 1–2.
-  const isEdge = (r: Region) => !r.background && (r.area < minArea || r.area / Math.max(1, rim.get(r.id) ?? 1) < 2.2);
+  const suspect = (r: Region) => !r.background && (r.area < minArea || r.area / Math.max(1, rim.get(r.id) ?? 1) < 2.2);
+  // Small or thin is not enough to call a region a halo: fine lettering is small and thin too.
+  // A halo's colour is a blend of the regions beside it; a real shape has its own colour.
+  const neighbours = new Map<number, Set<number>>();
   for (let i = 0; i < n; i++) {
-    const r = regions.get(labels[i]!);
-    if (r && isEdge(r)) labels[i] = -1;
+    const l = labels[i]!;
+    const r = regions.get(l);
+    if (!r || !suspect(r)) continue;
+    const x = i % width, y = (i / width) | 0;
+    for (const q of [x > 0 ? i - 1 : -1, x < width - 1 ? i + 1 : -1, y > 0 ? i - width : -1, y < height - 1 ? i + width : -1]) {
+      if (q < 0) continue;
+      const m = labels[q]!;
+      if (m !== l && m > 0) {
+        let set = neighbours.get(l);
+        if (!set) neighbours.set(l, (set = new Set()));
+        set.add(m);
+      }
+    }
   }
-  for (const [id, r] of regions) if (isEdge(r)) regions.delete(id);
+  const blendOfNeighbours = (r: Region) => {
+    const ids = [...(neighbours.get(r.id) ?? [])].filter((id) => regions.has(id));
+    const c = r.rgb;
+    const near = (A: number[]) => Math.hypot(c[0] - A[0]!, c[1] - A[1]!, c[2] - A[2]!) < 14;
+    // Next to a region of (almost) its own colour: a fragment of it, not a separate shape.
+    if (ids.some((id) => near(regions.get(id)!.rgb))) return true;
+    for (let u = 0; u < ids.length; u++)
+      for (let v = u + 1; v < ids.length; v++) {
+        const A = regions.get(ids[u]!)!.rgb, B = regions.get(ids[v]!)!.rgb;
+        const d = [A[0] - B[0], A[1] - B[1], A[2] - B[2]];
+        const dd = d[0]! * d[0]! + d[1]! * d[1]! + d[2]! * d[2]!;
+        if (dd < 100) continue;
+        const t = Math.max(0, Math.min(1, ((c[0] - B[0]) * d[0]! + (c[1] - B[1]) * d[1]! + (c[2] - B[2]) * d[2]!) / dd));
+        if (near([B[0] + t * d[0]!, B[1] + t * d[1]!, B[2] + t * d[2]!])) return true;
+      }
+    return false;
+  };
+  // Interior pixels (all four neighbours in the same region): a 1–2px sliver has none, while
+  // a real shape, even lettering with 3px strokes, does.
+  const interior = new Map<number, number>();
+  for (let i = 0; i < n; i++) {
+    const l = labels[i]!;
+    if (l <= 0) continue;
+    const x = i % width, y = (i / width) | 0;
+    if (x > 0 && x < width - 1 && y > 0 && y < height - 1 && labels[i - 1] === l && labels[i + 1] === l && labels[i - width] === l && labels[i + width] === l)
+      interior.set(l, (interior.get(l) ?? 0) + 1);
+  }
+  const isEdge = (r: Region) => suspect(r) && (r.area < 6 || !interior.get(r.id) || ids0(r) || blendOfNeighbours(r));
+  // A sliver touching only one other region (e.g. a halo ring inside a shape) is part of it.
+  const ids0 = (r: Region) => (neighbours.get(r.id)?.size ?? 0) === 0;
+  const drop = [...regions.values()].filter(isEdge).map((r) => r.id);
+  const dropSet = new Set(drop);
+  for (let i = 0; i < n; i++) if (dropSet.has(labels[i]!)) labels[i] = -1;
+  for (const id of drop) regions.delete(id);
   // Any other region that is still background-coloured (e.g. an enclosed off-white patch).
   if (!transparent)
     for (const r of regions.values())

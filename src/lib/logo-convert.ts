@@ -1,4 +1,5 @@
-import { withWhiteBackground } from "@/lib/png-background";
+import { withBackground, withWhiteBackground } from "@/lib/png-background";
+import { BOARD, boardView, reframeSvg } from "@/lib/board";
 import { coverageFromRgba, toSvg, vectorizeDetailed, type TracedPath } from "@/lib/vectorize";
 import { coverageSignature } from "@/lib/logo-fidelity";
 import { adviseColor, toLayeredSvg, traceColor, type ColorAdvice, type ColorLayer } from "@/lib/color-trace";
@@ -42,7 +43,7 @@ function canvas2d(width: number, height: number) {
  * Both PNG backgrounds rendered from the same vector pixels, so switching background
  * never needs another render. `size` is the long side in px.
  */
-export async function renderPngPair(svg: string, view: ViewBox, size = DEFAULT_PNG_SIZE) {
+export async function renderPngPair(svg: string, view: ViewBox, size = DEFAULT_PNG_SIZE, brand: string | null = null) {
   const vector = await decodeSvg(svg);
   const scale = size / Math.max(view.width, view.height);
   const { canvas, ctx } = canvas2d(Math.max(1, Math.round(view.width * scale)), Math.max(1, Math.round(view.height * scale)));
@@ -50,7 +51,24 @@ export async function renderPngPair(svg: string, view: ViewBox, size = DEFAULT_P
   const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const png = canvas.toDataURL("image/png");
   ctx.putImageData(new ImageData(withWhiteBackground(pixels.data), canvas.width, canvas.height), 0, 0);
-  return { png, whitePng: canvas.toDataURL("image/png"), width: canvas.width, height: canvas.height };
+  const whitePng = canvas.toDataURL("image/png");
+  let brandPng: string | null = null;
+  if (brand) {
+    const v = parseInt(brand.slice(1), 16);
+    ctx.putImageData(new ImageData(withBackground(pixels.data, [(v >> 16) & 255, (v >> 8) & 255, v & 255]), canvas.width, canvas.height), 0, 0);
+    brandPng = canvas.toDataURL("image/png");
+  }
+  return { png, whitePng, brandPng, width: canvas.width, height: canvas.height };
+}
+
+export type BoardOutputs = { svg: string; view: ViewBox; png: string; whitePng: string; brandPng: string | null };
+
+/** The default export: the logo centred on the 1300 × 1200 design board. */
+export async function boardOutputs(svg: string, paths: TracedPath[], brand: string | null): Promise<BoardOutputs> {
+  const view = boardView(paths);
+  const boardSvg = reframeSvg(svg, view, BOARD.width, BOARD.height);
+  const pngs = await renderPngPair(boardSvg, view, BOARD.width, brand);
+  return { svg: boardSvg, view, png: pngs.png, whitePng: pngs.whitePng, brandPng: pngs.brandPng };
 }
 
 /**
@@ -85,8 +103,25 @@ export type LogoOutputs = {
   /** Pixel match between the SVG and the image it was traced from. */
   accuracy: number;
   advice: ColorAdvice;
+  /** Logo-only PNG on the brand background (colour results with a coloured upload). */
+  brandPng?: string | null;
+  /** The logo on the 1300 × 1200 design board (the default export). */
+  board: BoardOutputs;
+  /** The upload's background colour when it is a real colour (not white or transparent). */
+  background: string | null;
   source: { width: number; height: number; transparent: boolean };
 };
+
+/** Border colour of an opaque upload when it is a real colour; null for white or near-white. */
+function brandBackground(d: Uint8ClampedArray, width: number, height: number) {
+  const ch: number[][] = [[], [], []];
+  const push = (x: number, y: number) => { const i = (y * width + x) * 4; for (let c = 0; c < 3; c++) ch[c]!.push(d[i + c]!); };
+  for (let x = 0; x < width; x++) { push(x, 0); push(x, height - 1); }
+  for (let y = 1; y < height - 1; y++) { push(0, y); push(width - 1, y); }
+  const med = ch.map((v) => v.sort((a, b) => a - b)[v.length >> 1] ?? 255);
+  if (med.every((v) => v >= 235)) return null;
+  return `#${med.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+}
 
 /** Loads an image and crops it to the logo plus an even margin (shared by both trace styles). */
 async function loadCrop(src: string) {
@@ -133,18 +168,20 @@ async function loadCrop(src: string) {
   const view: ViewBox = margin
     ? { x: ink.x0 - margin - x0, y: ink.y0 - margin - y0, width: ink.x1 - ink.x0 + 1 + 2 * margin, height: ink.y1 - ink.y0 + 1 + 2 * margin }
     : { x: 0, y: 0, width: cw, height: ch };
-  return { cw, ch, view, coverage: croppedCoverage, rgba, source: { width: data.width, height: data.height, transparent } };
+  return { cw, ch, view, coverage: croppedCoverage, rgba, background: transparent ? null : brandBackground(d, data.width, data.height), source: { width: data.width, height: data.height, transparent } };
 }
 
 export async function toOutputs(src: string): Promise<LogoOutputs> {
-  const { cw, ch, view, coverage: croppedCoverage, rgba, source } = await loadCrop(src);
+  const { cw, ch, view, coverage: croppedCoverage, rgba, source, background } = await loadCrop(src);
   const paths = vectorizeDetailed(croppedCoverage, cw, ch);
   const svg = toSvg(paths, cw, ch, view);
   // Shape fingerprint, so a redraw can be scored against the original.
   const signature = coverageSignature(croppedCoverage, cw, ch);
-  const [pngs, accuracy] = await Promise.all([
+  const [pngs, accuracy, board] = await Promise.all([
     renderPngPair(svg, view),
     pixelAccuracy(svg, view, croppedCoverage, cw, ch),
+    // Black & white never goes on the brand colour: black ink would vanish on dark brands.
+    boardOutputs(svg, paths, null),
   ]);
   return {
     png: pngs.png,
@@ -157,23 +194,29 @@ export async function toOutputs(src: string): Promise<LogoOutputs> {
     accuracy,
     // Cheap (downscaled) look at the colours, so the app can say whether colour is worth keeping.
     advice: adviseColor(rgba, cw, ch),
+    board,
+    background,
     source,
   };
 }
 
 /** 1 = the vector's colours match the image exactly (mean RGB difference over the logo). */
-async function colorAccuracy(svg: string, view: ViewBox, rgba: Uint8ClampedArray, width: number, height: number) {
+async function colorAccuracy(svg: string, view: ViewBox, rgba: Uint8ClampedArray, width: number, height: number, background: string | null) {
   const vector = await decodeSvg(svg);
   const { ctx } = canvas2d(width, height);
   ctx.drawImage(vector, view.x, view.y, view.width, view.height);
   const drawn = ctx.getImageData(0, 0, width, height).data;
-  // Compare both on white so transparent areas count as background in each.
-  const onWhite = (v: number, a: number) => v * a + 255 * (1 - a);
+  // Compare both on the upload's own background (white when it has none), so the background
+  // the trace leaves transparent counts as matching, not as a miss.
+  const bgv = background ? parseInt(background.slice(1), 16) : 0xffffff;
+  const bg = [(bgv >> 16) & 255, (bgv >> 8) & 255, bgv & 255];
+  const onBg = (v: number, a: number, c: number) => v * a + bg[c]! * (1 - a);
   let diff = 0, count = 0;
   for (let i = 0; i < rgba.length; i += 4) {
     const aa = (rgba[i + 3] ?? 255) / 255, ab = (drawn[i + 3] ?? 0) / 255;
-    const A = [0, 1, 2].map((c) => onWhite(rgba[i + c]!, aa)), B = [0, 1, 2].map((c) => onWhite(drawn[i + c]!, ab));
-    if (A.every((v) => v > 245) && B.every((v) => v > 245)) continue; // background in both
+    const A = [0, 1, 2].map((c) => onBg(rgba[i + c]!, aa, c)), B = [0, 1, 2].map((c) => onBg(drawn[i + c]!, ab, c));
+    const isBg = (v: number[]) => v.every((x, c) => Math.abs(x - bg[c]!) < 10);
+    if (isBg(A) && isBg(B)) continue; // background in both
     diff += (Math.abs(A[0]! - B[0]!) + Math.abs(A[1]! - B[1]!) + Math.abs(A[2]! - B[2]!)) / 3;
     count++;
   }
@@ -182,20 +225,28 @@ async function colorAccuracy(svg: string, view: ViewBox, rgba: Uint8ClampedArray
 
 /** Colour trace: one shape per colour region, flat or gradient filled. Slower than black & white. */
 export async function toColorOutputs(src: string): Promise<LogoOutputs> {
-  const { cw, ch, view, coverage, rgba, source } = await loadCrop(src);
+  const { cw, ch, view, coverage, rgba, source, background } = await loadCrop(src);
   const { layers, advice } = traceColor(rgba, cw, ch);
   const svg = toLayeredSvg(layers, cw, ch, view);
-  const [pngs, accuracy] = await Promise.all([renderPngPair(svg, view), colorAccuracy(svg, view, rgba, cw, ch)]);
+  const paths = layers.flatMap((l) => l.paths);
+  const [pngs, accuracy, board] = await Promise.all([
+    renderPngPair(svg, view, DEFAULT_PNG_SIZE, background),
+    colorAccuracy(svg, view, rgba, cw, ch, background),
+    boardOutputs(svg, paths, background),
+  ]);
   return {
     png: pngs.png,
     whitePng: pngs.whitePng,
     svg,
     signature: coverageSignature(coverage, cw, ch),
-    paths: layers.flatMap((l) => l.paths),
+    paths,
     layers,
     view,
     accuracy,
     advice,
+    board,
+    background,
+    brandPng: pngs.brandPng,
     source,
   };
 }
