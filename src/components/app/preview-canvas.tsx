@@ -3,6 +3,7 @@ import { Copy, Minus, Plus } from "lucide-react";
 import { outlineStats, type ViewBox } from "@/lib/outline";
 import { BOARD } from "@/lib/board";
 import type { LogoResult } from "@/lib/result-model";
+import { isOverlay, radialTransform } from "@/lib/color-trace";
 import { pathData } from "@/lib/vectorize";
 import { cn } from "@/lib/utils";
 
@@ -29,29 +30,38 @@ function Vector({ result, ink, className, frame }: { result: LogoResult; ink: st
   const layers = useMemo(() => result.layers.map((l) => ({ d: pathData(l.paths), fill: l.fill })), [result.layers]);
   const v = frame ?? result.view;
   const mono = result.variant === "mono";
+  // Black & white draws each outline once (shading overlays repeat their shape's outline).
+  const shown = mono ? layers.filter((_, i) => !isOverlay(result.layers[i]!.fill)) : layers;
   return (
     <svg viewBox={`${v.x} ${v.y} ${v.width} ${v.height}`} className={className} role="img" aria-label={`${result.name} vector`}>
       {!mono && (
         <defs>
-          {layers.map((l, i) =>
-            l.fill.type === "linear" ? (
+          {layers.map((l, i) => {
+            if (l.fill.type === "solid") return null;
+            const stops = l.fill.stops.map((st, k) => <stop key={k} offset={st.offset} stopColor={st.color} stopOpacity={st.opacity ?? 1} />);
+            return l.fill.type === "linear" ? (
               <linearGradient key={i} id={`${uid}g${i}`} gradientUnits="userSpaceOnUse" x1={l.fill.x1} y1={l.fill.y1} x2={l.fill.x2} y2={l.fill.y2}>
-                {l.fill.stops.map((st, k) => (
-                  <stop key={k} offset={st.offset} stopColor={st.color} />
-                ))}
+                {stops}
               </linearGradient>
-            ) : null,
-          )}
+            ) : (
+              <radialGradient
+                key={i}
+                id={`${uid}g${i}`}
+                gradientUnits="userSpaceOnUse"
+                cx={l.fill.cx}
+                cy={l.fill.cy}
+                r={l.fill.r}
+                gradientTransform={l.fill.sy !== 1 ? radialTransform(l.fill) : undefined}
+              >
+                {stops}
+              </radialGradient>
+            );
+          })}
         </defs>
       )}
-      {layers.map((l, i) => (
-        <path
-          key={i}
-          d={l.d}
-          fill={mono ? ink : l.fill.type === "solid" ? l.fill.color : `url(#${uid}g${i})`}
-          fillRule="evenodd"
-        />
-      ))}
+      {mono
+        ? shown.map((l, i) => <path key={i} d={l.d} fill={ink} fillRule="evenodd" />)
+        : layers.map((l, i) => <path key={i} d={l.d} fill={l.fill.type === "solid" ? l.fill.color : `url(#${uid}g${i})`} fillRule="evenodd" />)}
     </svg>
   );
 }
