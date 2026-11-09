@@ -213,7 +213,7 @@ export function PreviewCanvas({
             ) : view === "artwork" ? (
               <Vector result={result} ink={ink} className={art} />
             ) : (
-              <Outlines result={result} className={art} points={points} />
+              <Outlines result={result} className="h-auto max-h-[60vh] w-[min(560px,82vw)] max-w-full" points={points} />
             )}
           </div>
         </div>
