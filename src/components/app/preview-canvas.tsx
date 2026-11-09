@@ -1,7 +1,7 @@
 import { useId, useMemo, useState } from "react";
 import { Copy, Minus, Plus } from "lucide-react";
 import { outlineStats, type ViewBox } from "@/lib/outline";
-import { BOARD } from "@/lib/board";
+import { BOARD, pathsBounds } from "@/lib/board";
 import type { LogoResult } from "@/lib/result-model";
 import { isOverlay, radialTransform } from "@/lib/color-trace";
 import { pathData } from "@/lib/vectorize";
@@ -66,23 +66,37 @@ function Vector({ result, ink, className, frame }: { result: LogoResult; ink: st
   );
 }
 
-function Outlines({ result, className }: { result: LogoResult; className?: string }) {
+/**
+ * Blueprint-style outlines: the logo as a pale fill with a dashed outline, plus dashed guides
+ * along its top and bottom. Stroke widths are in screen pixels so every size looks the same.
+ */
+function Outlines({ result, className, points }: { result: LogoResult; className?: string; points: boolean }) {
   const d = useMemo(() => pathData(result.paths), [result.paths]);
   const stats = useMemo(() => outlineStats(result.paths), [result.paths]);
+  const b = useMemo(() => pathsBounds(result.paths), [result.paths]);
   const v = result.view;
   const unit = Math.max(v.width, v.height) / 360; // ~1 screen px at the default size
+  const ink = "var(--outline-ink)";
+  const far = Math.max(v.width, v.height) * 20;
+  const dash = { stroke: ink, strokeWidth: 1.5, strokeDasharray: "5 4", vectorEffect: "non-scaling-stroke" as const };
   return (
     <svg viewBox={`${v.x} ${v.y} ${v.width} ${v.height}`} className={cn("overflow-visible", className)} role="img" aria-label={`Outlines with ${stats.anchors.length} anchor points`}>
-      <path d={d} fill="none" stroke="#2F6BFF" strokeWidth={unit * 1.4} strokeLinejoin="round" />
-      {stats.handles.map(([a, h], i) => (
-        <g key={`h${i}`}>
-          <line x1={a.x} y1={a.y} x2={h.x} y2={h.y} stroke="#2F6BFF" strokeWidth={unit * 0.8} />
-          <circle cx={h.x} cy={h.y} r={unit * 2} fill="#2F6BFF" />
-        </g>
-      ))}
-      {stats.anchors.map((a, i) => (
-        <circle key={`a${i}`} cx={a.x} cy={a.y} r={unit * 3.4} fill="#FFFFFF" stroke="#2F6BFF" strokeWidth={unit * 1.4} />
-      ))}
+      <line x1={v.x - far} x2={v.x + v.width + far} y1={b.y0} y2={b.y0} {...dash} />
+      <line x1={v.x - far} x2={v.x + v.width + far} y1={b.y1} y2={b.y1} {...dash} />
+      <path d={d} fill="var(--outline-fill)" fillRule="evenodd" strokeLinejoin="round" {...dash} />
+      {points && (
+        <>
+          {stats.handles.map(([a, h], i) => (
+            <g key={`h${i}`}>
+              <line x1={a.x} y1={a.y} x2={h.x} y2={h.y} stroke={ink} strokeWidth={0.75} vectorEffect="non-scaling-stroke" />
+              <circle cx={h.x} cy={h.y} r={unit * 1.8} fill={ink} />
+            </g>
+          ))}
+          {stats.anchors.map((a, i) => (
+            <rect key={`a${i}`} x={a.x - unit * 2.6} y={a.y - unit * 2.6} width={unit * 5.2} height={unit * 5.2} fill="var(--outline-paper)" stroke={ink} strokeWidth={1.25} vectorEffect="non-scaling-stroke" />
+          ))}
+        </>
+      )}
     </svg>
   );
 }
@@ -103,6 +117,7 @@ export function PreviewCanvas({
   boardFill?: string | undefined;
 }) {
   const [zoom, setZoom] = useState(1);
+  const [points, setPoints] = useState(false);
   const zi = ZOOMS.indexOf(zoom);
   const views: { id: PreviewView; label: string }[] = [
     { id: "artwork", label: "Artwork" },
@@ -113,7 +128,7 @@ export function PreviewCanvas({
   const ink = back === "black" ? "#FFFFFF" : "#111111";
   const art = "h-auto w-[min(360px,70vw)] max-w-full";
   return (
-    <div className={cn("relative flex min-h-[340px] flex-1 flex-col overflow-hidden rounded-[18px] border border-border sm:min-h-[600px]", view === "code" ? "bg-card" : backClass(back))}>
+    <div className={cn("relative flex min-h-[340px] flex-1 flex-col overflow-hidden rounded-[18px] border border-border sm:min-h-[600px]", view === "code" ? "bg-card" : view === "outlines" ? "bg-outline-paper" : backClass(back))}>
       <div className="absolute inset-x-3 top-3 z-10 flex flex-wrap items-start justify-between gap-2">
         <div role="tablist" aria-label="View" className="flex gap-0.5 rounded-xl border border-border bg-card p-[3px] shadow-[0_2px_8px_rgba(17,17,17,0.06)]">
           {views.map((t) => (
@@ -143,6 +158,19 @@ export function PreviewCanvas({
                 <Plus className="h-4 w-4" aria-hidden="true" />
               </button>
             </div>
+            {view === "outlines" && (
+              <button
+                type="button"
+                aria-pressed={points}
+                onClick={() => setPoints((p) => !p)}
+                className={cn(
+                  "h-[40px] rounded-xl border border-border px-3 text-[13px] font-medium shadow-[0_2px_8px_rgba(17,17,17,0.06)]",
+                  points ? "bg-foreground text-primary-foreground" : "bg-card text-subtle hover:text-foreground",
+                )}
+              >
+                Points
+              </button>
+            )}
             {view === "artwork" && (
               <div role="radiogroup" aria-label="Canvas background" className="hidden items-center sm:flex gap-1 rounded-xl border border-border bg-card px-[5px] py-[3px] shadow-[0_2px_8px_rgba(17,17,17,0.06)]">
                 {BACKS.map((b) => (
@@ -185,7 +213,7 @@ export function PreviewCanvas({
             ) : view === "artwork" ? (
               <Vector result={result} ink={ink} className={art} />
             ) : (
-              <Outlines result={result} className={art} />
+              <Outlines result={result} className="h-auto max-h-[60vh] w-[min(560px,82vw)] max-w-full" points={points} />
             )}
           </div>
         </div>

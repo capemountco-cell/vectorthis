@@ -62,6 +62,9 @@
   --color-subtle: var(--subtle);
   --color-dot: var(--dot);
   --color-blue: var(--blue);
+  --color-outline-paper: var(--outline-paper);
+  --color-outline-fill: var(--outline-fill);
+  --color-outline-ink: var(--outline-ink);
   --color-warn: var(--warn);
   --color-warn-bg: var(--warn-bg);
   --color-warn-border: var(--warn-border);
@@ -94,6 +97,10 @@
   --subtle: oklch(0.355 0.005 106.4);
   --dot: oklch(0.88 0.004 106.4);
   --blue: oklch(0.585 0.215 262);
+  /* Outlines view: solid paper, pale logo fill, dashed dark-green outline (user's reference). */
+  --outline-paper: #f6f4f0;
+  --outline-fill: #e1e1df;
+  --outline-ink: #143f20;
   --warn: oklch(0.44 0.13 40);
   --warn-bg: oklch(0.98 0.012 60);
   --warn-border: oklch(0.86 0.06 50);
