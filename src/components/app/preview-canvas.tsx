@@ -1,7 +1,7 @@
 import { useId, useMemo, useState } from "react";
 import { Copy, Minus, Plus } from "lucide-react";
 import { outlineStats, type ViewBox } from "@/lib/outline";
-import { BOARD } from "@/lib/board";
+import { BOARD, pathsBounds } from "@/lib/board";
 import type { LogoResult } from "@/lib/result-model";
 import { isOverlay, radialTransform } from "@/lib/color-trace";
 import { pathData } from "@/lib/vectorize";
@@ -117,6 +117,7 @@ export function PreviewCanvas({
   boardFill?: string | undefined;
 }) {
   const [zoom, setZoom] = useState(1);
+  const [points, setPoints] = useState(false);
   const zi = ZOOMS.indexOf(zoom);
   const views: { id: PreviewView; label: string }[] = [
     { id: "artwork", label: "Artwork" },
@@ -127,7 +128,7 @@ export function PreviewCanvas({
   const ink = back === "black" ? "#FFFFFF" : "#111111";
   const art = "h-auto w-[min(360px,70vw)] max-w-full";
   return (
-    <div className={cn("relative flex min-h-[340px] flex-1 flex-col overflow-hidden rounded-[18px] border border-border sm:min-h-[600px]", view === "code" ? "bg-card" : backClass(back))}>
+    <div className={cn("relative flex min-h-[340px] flex-1 flex-col overflow-hidden rounded-[18px] border border-border sm:min-h-[600px]", view === "code" ? "bg-card" : view === "outlines" ? "bg-outline-paper" : backClass(back))}>
       <div className="absolute inset-x-3 top-3 z-10 flex flex-wrap items-start justify-between gap-2">
         <div role="tablist" aria-label="View" className="flex gap-0.5 rounded-xl border border-border bg-card p-[3px] shadow-[0_2px_8px_rgba(17,17,17,0.06)]">
           {views.map((t) => (
@@ -157,6 +158,19 @@ export function PreviewCanvas({
                 <Plus className="h-4 w-4" aria-hidden="true" />
               </button>
             </div>
+            {view === "outlines" && (
+              <button
+                type="button"
+                aria-pressed={points}
+                onClick={() => setPoints((p) => !p)}
+                className={cn(
+                  "h-[40px] rounded-xl border border-border px-3 text-[13px] font-medium shadow-[0_2px_8px_rgba(17,17,17,0.06)]",
+                  points ? "bg-foreground text-primary-foreground" : "bg-card text-subtle hover:text-foreground",
+                )}
+              >
+                Points
+              </button>
+            )}
             {view === "artwork" && (
               <div role="radiogroup" aria-label="Canvas background" className="hidden items-center sm:flex gap-1 rounded-xl border border-border bg-card px-[5px] py-[3px] shadow-[0_2px_8px_rgba(17,17,17,0.06)]">
                 {BACKS.map((b) => (
@@ -199,7 +213,7 @@ export function PreviewCanvas({
             ) : view === "artwork" ? (
               <Vector result={result} ink={ink} className={art} />
             ) : (
-              <Outlines result={result} className={art} />
+              <Outlines result={result} className={art} points={points} />
             )}
           </div>
         </div>
