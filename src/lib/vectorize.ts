@@ -132,10 +132,48 @@ export function coverageFromRgba(rgba: Uint8ClampedArray, width: number, height:
   const strong: number[] = [];
   for (let i = 0; i < n; i++) if (dist[i]! > max * 0.6) strong.push(dist[i]!);
   const ink = median(strong) || max;
+  // Background noise (compression, dot grids, gradients) measured on the border.
+  const borderDist: number[] = [];
+  for (let k = 0; k < border[0]!.length; k++) {
+    const dr = border[0]![k]! - bg[0], dg = border[1]![k]! - bg[1], db = border[2]![k]! - bg[2];
+    borderDist.push(Math.sqrt(dr * dr + dg * dg + db * db));
+  }
+  borderDist.sort((p, q) => p - q);
+  const noise = borderDist[Math.floor(borderDist.length * 0.95)] ?? 0;
+  // Local ink strength: parts of a logo that fade towards the background colour (a pale
+  // bottom, a light second colour) keep a crisp silhouette, but against the global ink
+  // strength they sit near 50% and their grain traced as a ragged edge. Each pixel is
+  // measured against the strongest ink nearby instead, never below a floor well above the
+  // background noise, so the background itself is not boosted into ink.
+  const floor = Math.min(ink * 0.6, Math.max(ink * 0.25, noise * 3));
+  const local = maxFilter(dist, width, height, Math.max(4, Math.round(Math.max(width, height) * 0.01)));
   // Compression noise and faint screenshot edges sit a few % off the background; cutting
   // the bottom and top 10% symmetrically removes them while the 50% edge stays put.
   const NOISE = 0.1;
-  for (let i = 0; i < n; i++) out[i] = Math.min(1, Math.max(0, (dist[i]! / ink - NOISE) / (1 - 2 * NOISE)));
+  for (let i = 0; i < n; i++) {
+    const ref = Math.min(ink, Math.max(floor, local[i]!));
+    out[i] = Math.min(1, Math.max(0, (dist[i]! / ref - NOISE) / (1 - 2 * NOISE)));
+  }
+  return out;
+}
+
+/** Separable square max filter of radius r. */
+function maxFilter(src: Float32Array, width: number, height: number, r: number) {
+  const tmp = new Float32Array(src.length), out = new Float32Array(src.length);
+  for (let y = 0; y < height; y++) {
+    const row = y * width;
+    for (let x = 0; x < width; x++) {
+      let m = 0;
+      for (let xx = Math.max(0, x - r), e = Math.min(width - 1, x + r); xx <= e; xx++) if (src[row + xx]! > m) m = src[row + xx]!;
+      tmp[row + x] = m;
+    }
+  }
+  for (let x = 0; x < width; x++)
+    for (let y = 0; y < height; y++) {
+      let m = 0;
+      for (let yy = Math.max(0, y - r), e = Math.min(height - 1, y + r); yy <= e; yy++) if (tmp[yy * width + x]! > m) m = tmp[yy * width + x]!;
+      out[y * width + x] = m;
+    }
   return out;
 }
 
