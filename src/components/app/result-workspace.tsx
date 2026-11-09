@@ -4,6 +4,7 @@ import { Drawer, DrawerContent, DrawerDescription, DrawerTitle } from "@/compone
 import { renderPngPair } from "@/lib/logo-convert";
 import { saveLogoSvg } from "@/lib/logo-files";
 import { outlineStats } from "@/lib/outline";
+import { isOverlay } from "@/lib/color-trace";
 import { pngPairFiles, type Canvas, type LogoResult, type PngPair, type Variant } from "@/lib/result-model";
 import { BOARD } from "@/lib/board";
 import { savePng } from "@/lib/save-png";
@@ -66,7 +67,9 @@ export function ResultWorkspace({ result, versions, onPickVersion, onNew, onReru
   const [sheetFormat, setSheetFormat] = useState<Format>("svg");
   const [fix, setFix] = useState("");
   const stats = useMemo(() => outlineStats(result.paths), [result.paths]);
-  const gradientCount = result.layers.filter((l) => l.fill.type === "linear").length;
+  const shapeLayers = result.layers.filter((l) => !isOverlay(l.fill));
+  const gradientCount = shapeLayers.filter((l) => l.fill.type !== "solid").length;
+  const shadeCount = result.layers.length - shapeLayers.length;
   const info = modeInfo(result.mode);
   // The brand background (the upload's own colour) only makes sense for colour results.
   const brand = result.variant === "color" ? result.background : null;
@@ -294,7 +297,7 @@ export function ResultWorkspace({ result, versions, onPickVersion, onNew, onReru
             )}
             <dl className="grid grid-cols-2 gap-2.5">
               <Stat label="ANCHORS" value={stats.anchors.length} />
-              <Stat label="SHAPES" value={stats.shapes} extra={stats.holes ? `${stats.holes} holes` : undefined} />
+              <Stat label="SHAPES" value={stats.shapes} extra={stats.holes ? `${stats.holes} hole${stats.holes === 1 ? "" : "s"}` : undefined} />
               <Stat label="CURVES" value={stats.curves} />
               <Stat label="STRAIGHT" value={stats.lines} />
             </dl>
@@ -364,7 +367,7 @@ export function ResultWorkspace({ result, versions, onPickVersion, onNew, onReru
               {format === "png"
                 ? "Rendered from the vector, so it stays crisp at any size."
                 : result.variant === "color"
-                  ? `${result.layers.length} colour shapes${gradientCount ? `, ${gradientCount} gradients` : ""} · opens in Figma, Illustrator and Canva.`
+                  ? `${shapeLayers.length} colour shapes${gradientCount ? `, ${gradientCount} gradients` : ""}${shadeCount ? `, ${shadeCount} soft highlights & shadows` : ""} · opens in Figma, Illustrator and Canva.`
                   : "One clean path · opens in Figma, Illustrator and Canva."}
             </p>
             {saveError && <p role="alert" className="text-[13px] text-destructive">{saveError}</p>}

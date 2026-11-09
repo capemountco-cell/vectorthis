@@ -2,7 +2,7 @@ import { withBackground, withWhiteBackground } from "@/lib/png-background";
 import { BOARD, boardView, reframeSvg } from "@/lib/board";
 import { coverageFromRgba, toSvg, vectorizeDetailed, type TracedPath } from "@/lib/vectorize";
 import { coverageSignature } from "@/lib/logo-fidelity";
-import { adviseColor, toLayeredSvg, traceColor, type ColorAdvice, type ColorLayer } from "@/lib/color-trace";
+import { adviseColor, isOverlay, toLayeredSvg, traceColor, type ColorAdvice, type ColorLayer } from "@/lib/color-trace";
 import type { ViewBox } from "@/lib/outline";
 
 // Turns a single-colour logo (any ink/background colours, or transparent) into a traced SVG
@@ -223,12 +223,13 @@ async function colorAccuracy(svg: string, view: ViewBox, rgba: Uint8ClampedArray
   return count ? Math.max(0, 1 - diff / count / 255) : 0;
 }
 
-/** Colour trace: one shape per colour region, flat or gradient filled. Slower than black & white. */
+/** Colour trace: one shape per colour region, flat or gradient filled, plus soft highlights and shadows. Slower than black & white. */
 export async function toColorOutputs(src: string): Promise<LogoOutputs> {
   const { cw, ch, view, coverage, rgba, source, background } = await loadCrop(src);
   const { layers, advice } = traceColor(rgba, cw, ch);
   const svg = toLayeredSvg(layers, cw, ch, view);
-  const paths = layers.flatMap((l) => l.paths);
+  // Shading overlays reuse their shape's outline: count each outline once.
+  const paths = layers.filter((l) => !isOverlay(l.fill)).flatMap((l) => l.paths);
   const [pngs, accuracy, board] = await Promise.all([
     renderPngPair(svg, view, DEFAULT_PNG_SIZE, background),
     colorAccuracy(svg, view, rgba, cw, ch, background),

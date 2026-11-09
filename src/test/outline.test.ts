@@ -68,6 +68,24 @@ describe("outline parsing", () => {
     expect(parsed.paths).toEqual([square, hole]);
   });
 
+  it("reads radial gradients and fading shading overlays back, and counts each outline once", () => {
+    const layers: ColorLayer[] = [
+      { paths: [square], fill: { type: "radial", cx: 20, cy: 10, r: 25, sy: 1.4, stops: [{ offset: 0, color: "#e61704" }, { offset: 1, color: "#f0a96b" }] } },
+      { paths: [square], fill: { type: "radial", cx: 12, cy: 8, r: 9, sy: 1, stops: [{ offset: 0, color: "#fd836e" }, { offset: 0.5, color: "#fd836e", opacity: 0.4 }, { offset: 1, color: "#fd836e", opacity: 0 }] } },
+    ];
+    const svg = toLayeredSvg(layers, 40, 40);
+    expect(svg).toContain('gradientTransform="matrix(1 0 0 1.4 0 -4)"');
+    const parsed = parseSvg(svg);
+    expect(parsed.layers).toEqual(layers);
+    expect(parsed.paths).toEqual([square]);
+  });
+
+  it("ignores radial gradients with transforms it did not write", () => {
+    const svg =
+      '<svg viewBox="0 0 10 10"><defs><radialGradient id="g0" cx="5" cy="5" r="4" gradientTransform="rotate(30)"><stop offset="0" stop-color="#ff0000"/></radialGradient></defs><path fill="url(#g0)" d="M0 0L5 0L5 5Z"/></svg>';
+    expect(parseSvg(svg).layers[0]!.fill).toEqual({ type: "solid", color: "#000000" });
+  });
+
   it("never trusts foreign fills: anything but a hex colour or own gradient reads as black", () => {
     const svg = '<svg viewBox="0 0 10 10"><path fill="url(javascript:alert(1))" d="M0 0L5 0L5 5Z"/><path fill="red" d="M1 1L4 1L4 4Z"/></svg>';
     expect(parseSvg(svg).layers.map((l) => l.fill)).toEqual([{ type: "solid", color: "#000000" }, { type: "solid", color: "#000000" }]);

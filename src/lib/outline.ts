@@ -1,6 +1,6 @@
 // Pure helpers for showing a traced SVG's structure (no DOM).
 import type { Point, Segment, TracedPath } from "@/lib/vectorize";
-import type { ColorLayer, Fill } from "@/lib/color-trace";
+import { isOverlay, type ColorLayer, type Fill, type GradientStop } from "@/lib/color-trace";
 
 export type ViewBox = { x: number; y: number; width: number; height: number };
 
@@ -44,20 +44,37 @@ const attr = (tag: string, name: string) => tag.match(new RegExp(`\\s${name}="([
 
 /**
  * Reads back an SVG this app wrote: viewBox, and each path's outline and fill (a hex
- * colour or one of its own linear gradients). Anything else is ignored, never rendered.
+ * colour or one of its own linear or radial gradients). Anything else is ignored, never rendered.
  */
 export function parseSvg(svg: string): { paths: TracedPath[]; view: ViewBox | null; layers: ColorLayer[] } {
   const vb = svg.match(/viewBox="([^"]+)"/)?.[1]?.trim().split(/[\s,]+/).map(Number);
   const view = vb && vb.length === 4 && vb.every(Number.isFinite) ? { x: vb[0]!, y: vb[1]!, width: vb[2]!, height: vb[3]! } : null;
   const gradients = new Map<string, Fill>();
+  const readStops = (body: string): GradientStop[] =>
+    [...body.matchAll(/<stop([^>]*)\/?>/g)]
+      .map((st) => {
+        const op = attr(st[1]!, "stop-opacity");
+        const opacity = op === undefined ? undefined : Number(op);
+        return { offset: Number(attr(st[1]!, "offset")), color: attr(st[1]!, "stop-color") ?? "", ...(opacity !== undefined && Number.isFinite(opacity) ? { opacity: Math.max(0, Math.min(1, opacity)) } : {}) };
+      })
+      .filter((st) => Number.isFinite(st.offset) && HEX.test(st.color));
   for (const m of svg.matchAll(/<linearGradient([^>]*)>([\s\S]*?)<\/linearGradient>/g)) {
     const tag = m[1]!, id = attr(tag, "id");
     const n = (k: string) => Number(attr(tag, k));
-    const stops = [...m[2]!.matchAll(/<stop([^>]*)\/?>/g)]
-      .map((st) => ({ offset: Number(attr(st[1]!, "offset")), color: attr(st[1]!, "stop-color") ?? "" }))
-      .filter((st) => Number.isFinite(st.offset) && HEX.test(st.color));
+    const stops = readStops(m[2]!);
     if (id && stops.length && ["x1", "y1", "x2", "y2"].every((k) => Number.isFinite(n(k))))
       gradients.set(id, { type: "linear", x1: n("x1"), y1: n("y1"), x2: n("x2"), y2: n("y2"), stops });
+  }
+  for (const m of svg.matchAll(/<radialGradient([^>]*)>([\s\S]*?)<\/radialGradient>/g)) {
+    const tag = m[1]!, id = attr(tag, "id");
+    const n = (k: string) => Number(attr(tag, k));
+    const stops = readStops(m[2]!);
+    // Only the vertical scale this app writes: matrix(1 0 0 sy 0 cy·(1 − sy)).
+    const tf = attr(tag, "gradientTransform");
+    const mt = tf?.match(/^matrix\(1 0 0 ([-\d.e]+) 0 [-\d.e]+\)$/);
+    const sy = tf === undefined ? 1 : mt ? Number(mt[1]) : NaN;
+    if (id && stops.length && ["cx", "cy", "r"].every((k) => Number.isFinite(n(k))) && n("r") > 0 && Number.isFinite(sy) && sy > 0)
+      gradients.set(id, { type: "radial", cx: n("cx"), cy: n("cy"), r: n("r"), sy, stops });
   }
   const layers: ColorLayer[] = [];
   for (const m of svg.matchAll(/<path([^>]*)\/?>/g)) {
@@ -70,7 +87,7 @@ export function parseSvg(svg: string): { paths: TracedPath[]; view: ViewBox | nu
     const fill: Fill = ref && gradients.has(ref) ? gradients.get(ref)! : { type: "solid", color: HEX.test(f) ? f : "#000000" };
     layers.push({ paths, fill });
   }
-  return { paths: layers.flatMap((l) => l.paths), view, layers };
+  return { paths: layers.filter((l) => !isOverlay(l.fill)).flatMap((l) => l.paths), view, layers };
 }
 
 function area(path: TracedPath) {

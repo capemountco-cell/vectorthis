@@ -9,11 +9,21 @@
 // 4. Every region is traced from its own coverage, and slightly overlaps the regions drawn
 //    on top of it so no hairline seams show between neighbours.
 import { coverageFromRgba, edgeSoftness, pathData, vectorizeScaled, type TracedPath } from "@/lib/vectorize";
+import { dE, distanceInside, hex, labOf, rgbOf } from "@/lib/color-math";
+import { fillAt, fitShading } from "@/lib/shading";
 
-export type GradientStop = { offset: number; color: string };
+/** opacity < 1 only on soft shading overlays (highlights and shadows), which fade out. */
+export type GradientStop = { offset: number; color: string; opacity?: number | undefined };
 export type Fill =
   | { type: "solid"; color: string }
-  | { type: "linear"; x1: number; y1: number; x2: number; y2: number; stops: GradientStop[] };
+  | { type: "linear"; x1: number; y1: number; x2: number; y2: number; stops: GradientStop[] }
+  /** Elliptical radial gradient: radius r across, r × sy down, centred on (cx, cy). */
+  | { type: "radial"; cx: number; cy: number; r: number; sy: number; stops: GradientStop[] };
+
+/** A shading overlay: drawn over the shape below it with the same outline, fading to clear. */
+export function isOverlay(fill: Fill) {
+  return fill.type !== "solid" && fill.stops.some((s) => (s.opacity ?? 1) < 1);
+}
 export type ColorLayer = { paths: TracedPath[]; fill: Fill };
 
 export type ColorAdvice = {
@@ -26,38 +36,13 @@ export type ColorAdvice = {
   reason: string;
 };
 
-// ---------- colour maths ----------
-
-const toLinear = (c: number) => {
-  const v = c / 255;
-  return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
-};
-const LIN = Array.from({ length: 256 }, (_, i) => toLinear(i));
-
-function labOf(r: number, g: number, b: number): [number, number, number] {
-  const R = LIN[Math.max(0, Math.min(255, Math.round(r)))]!,
-    G = LIN[Math.max(0, Math.min(255, Math.round(g)))]!,
-    B = LIN[Math.max(0, Math.min(255, Math.round(b)))]!;
-  const f = (t: number) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
-  const x = f((0.4124 * R + 0.3576 * G + 0.1805 * B) / 0.95047);
-  const y = f(0.2126 * R + 0.7152 * G + 0.0722 * B);
-  const z = f((0.0193 * R + 0.1192 * G + 0.9505 * B) / 1.08883);
-  return [116 * y - 16, 500 * (x - y), 200 * (y - z)];
-}
-
-const dE = (a: ArrayLike<number>, ai: number, b: ArrayLike<number>, bi: number) =>
-  Math.hypot(a[ai]! - b[bi]!, a[ai + 1]! - b[bi + 1]!, a[ai + 2]! - b[bi + 2]!);
-
-export function hex(r: number, g: number, b: number) {
-  const h = (v: number) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0");
-  return `#${h(r)}${h(g)}${h(b)}`;
-}
+export { hex } from "@/lib/color-math";
 
 // ---------- regions ----------
 
 type Model =
   | { kind: "flat"; rgb: [number, number, number] }
-  | { kind: "linear"; cx: number; cy: number; base: [number, number, number]; gx: number[]; gy: number[]; fill: Fill };
+  | { kind: "shaded"; fill: Fill; overlays: Fill[] };
 
 type Region = {
   id: number;
@@ -90,7 +75,7 @@ const BG_FLOOD = 14; // background flood from the border: max ΔE from the backg
 const BG_ANY = 5; // anywhere in the image: this close to the background colour is background
 const BG_DE = 12; // regions this close to the background colour are background
 
-export function segment(rgba: Uint8ClampedArray, width: number, height: number): Segmentation {
+export function segment(rgba: Uint8ClampedArray, width: number, height: number, opts: { shading?: boolean } = {}): Segmentation {
   const n = width * height;
   const rgb = new Float32Array(n * 3), lab = new Float32Array(n * 3), alpha = new Float32Array(n);
   let clear = 0;
@@ -260,138 +245,209 @@ export function segment(rgba: Uint8ClampedArray, width: number, height: number):
         r.background = true;
         r.model = { kind: "flat", rgb: bgRgb };
       }
+  if (opts.shading) next = splitAppendages(labels, lab, rgb, width, regions, next);
   const seg: Segmentation = { width, height, transparent, labels, regions, alpha, rgb, lab, bgRgb };
-  for (const r of regions.values()) if (!r.background) r.model = fitModel(seg, r);
+  for (const r of regions.values()) if (!r.background) r.model = fitModel(seg, r, opts.shading ?? false);
   return seg;
 }
 
 // ---------- colour models ----------
 
-function solve3(m: number[][], v: number[]): number[] {
-  // Cramer's rule for a 3×3 system (well-conditioned: coordinates are centred).
-  const det = (a: number[][]) =>
-    a[0]![0]! * (a[1]![1]! * a[2]![2]! - a[1]![2]! * a[2]![1]!) -
-    a[0]![1]! * (a[1]![0]! * a[2]![2]! - a[1]![2]! * a[2]![0]!) +
-    a[0]![2]! * (a[1]![0]! * a[2]![1]! - a[1]![1]! * a[2]![0]!);
-  const d = det(m);
-  if (Math.abs(d) < 1e-9) return [v[0]! / Math.max(1, m[0]![0]!), 0, 0];
-  return [0, 1, 2].map((c) => det(m.map((row, r) => row.map((x, k) => (k === c ? v[r]! : x)))) / d);
-}
-
-/** Flat colour, or a linear gradient with up to 6 stops when the region visibly shades. */
-function fitModel(seg: Segmentation, r: Region): Model {
+/**
+ * Fits a region's fill from its inner pixels (those a few px from its outline: edge pixels
+ * are part background, which would wash out the colours).
+ */
+function fitModel(seg: Segmentation, r: Region, shading: boolean): Model {
   const { width, labels, rgb } = seg;
-  const pts: number[] = [];
-  for (let y = r.y0; y <= r.y1; y++)
-    for (let x = r.x0; x <= r.x1; x++) {
-      const i = y * width + x;
-      if (labels[i] !== r.id) continue;
-      // Interior pixels only: edge pixels are partly another colour.
-      if (labels[i - 1] !== r.id || labels[i + 1] !== r.id || labels[i - width] !== r.id || labels[i + width] !== r.id) continue;
-      pts.push(i);
-    }
-  const use = pts.length >= 30 ? pts : [];
-  if (!use.length) return { kind: "flat", rgb: r.rgb };
-  const step = Math.max(1, Math.floor(use.length / 40000));
-  let cx = 0, cy = 0, cnt = 0;
-  for (let k = 0; k < use.length; k += step) { const i = use[k]!; cx += i % width; cy += (i / width) | 0; cnt++; }
-  cx /= cnt; cy /= cnt;
-  let sxx = 0, sxy = 0, syy = 0, sx = 0, sy = 0;
-  const sc = [0, 0, 0], scx = [0, 0, 0], scy = [0, 0, 0];
-  for (let k = 0; k < use.length; k += step) {
-    const i = use[k]!, x = (i % width) - cx, y = ((i / width) | 0) - cy;
-    sxx += x * x; sxy += x * y; syy += y * y; sx += x; sy += y;
-    for (let c = 0; c < 3; c++) { const v = rgb[i * 3 + c]!; sc[c]! += v; scx[c]! += v * x; scy[c]! += v * y; }
+  const bw = r.x1 - r.x0 + 1, bh = r.y1 - r.y0 + 1;
+  const mask = new Uint8Array(bw * bh);
+  for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) if (labels[(y + r.y0) * width + x + r.x0] === r.id) mask[y * bw + x] = 1;
+  const dist = distanceInside(mask, bw, bh);
+  let deepest = 0;
+  for (let j = 0; j < bw * bh; j++) if (dist[j]! > deepest) deepest = dist[j]!;
+  const dmin = deepest >= 8 ? 3 : deepest >= 3 ? 1.5 : 1;
+  let n = 0;
+  for (let j = 0; j < bw * bh; j++) if (dist[j]! >= dmin) n++;
+  const xs = new Float32Array(n), ys = new Float32Array(n), cs = new Float32Array(n * 3);
+  let k = 0;
+  for (let j = 0; j < bw * bh; j++) {
+    if (dist[j]! < dmin) continue;
+    const x = (j % bw) + r.x0, y = ((j / bw) | 0) + r.y0, i = y * width + x;
+    xs[k] = x; ys[k] = y;
+    cs[k * 3] = rgb[i * 3]!; cs[k * 3 + 1] = rgb[i * 3 + 1]!; cs[k * 3 + 2] = rgb[i * 3 + 2]!;
+    k++;
   }
-  const M = [[cnt, sx, sy], [sx, sxx, sxy], [sy, sxy, syy]];
-  const base: number[] = [], gx: number[] = [], gy: number[] = [];
-  for (let c = 0; c < 3; c++) {
-    const [a, b, d] = solve3(M, [sc[c]!, scx[c]!, scy[c]!]);
-    base.push(a!); gx.push(b!); gy.push(d!);
-  }
-  // Direction of strongest colour change: top eigenvector of GᵀG.
-  const A = gx.reduce((s, v) => s + v * v, 0), B = gx.reduce((s, v, c) => s + v * gy[c]!, 0), C = gy.reduce((s, v) => s + v * v, 0);
-  const theta = 0.5 * Math.atan2(2 * B, A - C);
-  const vx = Math.cos(theta), vy = Math.sin(theta);
-  // Bin colours along that direction; gradient stops come from the bin means.
-  const proj: number[] = [];
-  for (let k = 0; k < use.length; k += step) { const i = use[k]!; proj.push(((i % width) - cx) * vx + (((i / width) | 0) - cy) * vy); }
-  const sorted = proj.slice().sort((p, q) => p - q);
-  const s1 = sorted[Math.floor(sorted.length * 0.01)]!, s2 = sorted[Math.floor(sorted.length * 0.99)]!;
-  const flat = (): Model => ({ kind: "flat", rgb: [base[0]!, base[1]!, base[2]!] });
-  if (s2 - s1 < 4) return flat();
-  const BINS = 16;
-  const bins = Array.from({ length: BINS }, () => ({ n: 0, r: 0, g: 0, b: 0 }));
-  let idx = 0;
-  for (let k = 0; k < use.length; k += step) {
-    const i = use[k]!, s = proj[idx++]!;
-    const bi = Math.min(BINS - 1, Math.max(0, Math.floor(((s - s1) / (s2 - s1)) * BINS)));
-    const bin = bins[bi]!;
-    bin.n++; bin.r += rgb[i * 3]!; bin.g += rgb[i * 3 + 1]!; bin.b += rgb[i * 3 + 2]!;
-  }
-  const minBin = Math.max(3, cnt * 0.004);
-  const cols = bins
-    .map((b, bi) => ({ t: (bi + 0.5) / BINS, n: b.n, rgb: [b.r / b.n, b.g / b.n, b.b / b.n] as [number, number, number] }))
-    .filter((b) => b.n >= minBin);
-  if (cols.length < 2) return flat();
-  const labs = cols.map((c) => labOf(...c.rgb));
-  const first = 0, last = cols.length - 1;
-  if (dE(labs[first]!, 0, labs[last]!, 0) < 5) {
-    // Ends match: still a gradient if the middle differs (e.g. light band in the middle).
-    const mid = labs.reduce((m, l, k) => Math.max(m, dE(l, 0, labs[first]!, 0)), 0);
-    if (mid < 6) return flat();
-  }
-  // Greedy stops: add the bin furthest from the current piecewise-linear gradient.
-  const stops = [first, last];
-  const interp = (t: number) => {
-    let a = stops[0]!, b = stops[stops.length - 1]!;
-    for (let k = 0; k + 1 < stops.length; k++) if (cols[stops[k]!]!.t <= t && t <= cols[stops[k + 1]!]!.t) { a = stops[k]!; b = stops[k + 1]!; }
-    const ta = cols[a]!.t, tb = cols[b]!.t, u = tb > ta ? (t - ta) / (tb - ta) : 0;
-    return [0, 1, 2].map((c) => cols[a]!.rgb[c]! + (cols[b]!.rgb[c]! - cols[a]!.rgb[c]!) * u) as [number, number, number];
-  };
-  while (stops.length < 6) {
-    let worst = -1, worstErr = 2.5;
-    cols.forEach((c, k) => {
-      if (stops.includes(k)) return;
-      const e = dE(labOf(...interp(c.t)), 0, labs[k]!, 0);
-      if (e > worstErr) { worstErr = e; worst = k; }
-    });
-    if (worst < 0) break;
-    stops.push(worst);
-    stops.sort((p, q) => p - q);
-  }
-  const P = (t: number) => ({ x: cx + vx * (s1 + (s2 - s1) * t), y: cy + vy * (s1 + (s2 - s1) * t) });
-  const p1 = P(0), p2 = P(1);
-  const fill: Fill = {
-    type: "linear",
-    x1: p1.x + 0.5, y1: p1.y + 0.5, x2: p2.x + 0.5, y2: p2.y + 0.5, // pixel centres sit at +0.5
-    stops: stops.map((k) => ({ offset: Math.round(cols[k]!.t * 1000) / 1000, color: hex(...cols[k]!.rgb) })),
-  };
-  return { kind: "linear", cx, cy, base: [base[0]!, base[1]!, base[2]!], gx, gy, fill };
+  if (n < 30) return { kind: "flat", rgb: r.rgb };
+  // Overlays only for regions big enough to carry visible shading.
+  const big = r.area >= Math.max(2000, seg.width * seg.height * 0.01);
+  const { base, overlays } = fitShading({ xs, ys, cs, n }, r, { soft: shading, overlays: shading && big ? 5 : 0 });
+  if (base.type === "solid" && !overlays.length) return { kind: "flat", rgb: rgbOf(base.color) };
+  return { kind: "shaded", fill: base, overlays };
 }
 
+/** The colour a region's model paints at a pixel (overlays included). */
 function modelColor(r: Region, x: number, y: number): [number, number, number] {
   if (r.model.kind === "flat") return r.model.rgb;
-  const m = r.model, dx = x - m.cx, dy = y - m.cy;
-  return [0, 1, 2].map((c) => m.base[c]! + m.gx[c]! * dx + m.gy[c]! * dy) as [number, number, number];
+  const c = fillAt(r.model.fill, x + 0.5, y + 0.5).c.slice() as [number, number, number];
+  for (const o of r.model.overlays) {
+    const { c: oc, a } = fillAt(o, x + 0.5, y + 0.5);
+    for (let k = 0; k < 3; k++) c[k] = c[k]! + (oc[k]! - c[k]!) * a;
+  }
+  return c;
+}
+
+// ---------- appendages ----------
+
+/**
+ * Splits off thin parts of a large region that are clearly another colour, such as an apple's
+ * stem joined to the fruit through soft shading: region growth can walk across that blend,
+ * but a morphological opening cuts the stem off at the fruit's outline, and its colour
+ * decides whether it is a separate shape.
+ */
+function splitAppendages(labels: Int32Array, lab: Float32Array, rgb: Float32Array, width: number, regions: Map<number, Region>, nextId: number) {
+  for (const r of [...regions.values()]) {
+    if (r.background) continue;
+    const bw = r.x1 - r.x0 + 1, bh = r.y1 - r.y0 + 1;
+    if (r.area < 1500 || Math.min(bw, bh) < 40) continue;
+    const rad = Math.max(3, Math.min(20, Math.round(0.03 * Math.min(bw, bh))));
+    const mask = new Uint8Array(bw * bh);
+    for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) if (labels[(y + r.y0) * width + x + r.x0] === r.id) mask[y * bw + x] = 1;
+    const inner = distanceInside(mask, bw, bh);
+    const eroded = new Uint8Array(bw * bh);
+    let any = false;
+    for (let j = 0; j < bw * bh; j++) if (inner[j]! > rad) { eroded[j] = 1; any = true; }
+    if (!any) continue;
+    // Opening = erosion then dilation (distance to the eroded set ≤ rad).
+    const notEroded = new Uint8Array(bw * bh);
+    for (let j = 0; j < bw * bh; j++) notEroded[j] = eroded[j] ? 0 : 1;
+    const toEroded = distanceInside(notEroded, bw, bh, true);
+    const residue = new Uint8Array(bw * bh);
+    for (let j = 0; j < bw * bh; j++) if (mask[j] && toEroded[j]! > rad + 0.5) residue[j] = 1;
+    let body: number[] | null = null;
+    const bodyMean = () => {
+      if (body) return body;
+      const m = [0, 0, 0];
+      let cnt = 0;
+      for (let j = 0; j < bw * bh; j++) {
+        if (!mask[j] || residue[j]) continue;
+        const i = ((j / bw) | 0) * width + r.y0 * width + (j % bw) + r.x0;
+        for (let k = 0; k < 3; k++) m[k]! += lab[i * 3 + k]!;
+        cnt++;
+      }
+      return (body = m.map((v) => v / Math.max(1, cnt)));
+    };
+    // Connected parts of what the opening removed.
+    const comp = new Int32Array(bw * bh).fill(-1);
+    const stack: number[] = [];
+    let c = 0;
+    for (let j0 = 0; j0 < bw * bh; j0++) {
+      if (!residue[j0] || comp[j0]! >= 0) continue;
+      const pix: number[] = [];
+      comp[j0] = c; stack.push(j0);
+      while (stack.length) {
+        const j = stack.pop()!;
+        pix.push(j);
+        const x = j % bw, y = (j / bw) | 0;
+        // Gaps of up to 2 px are bridged: a stem's tip can hang on by edge pixels only.
+        for (let yy = Math.max(0, y - 2); yy <= Math.min(bh - 1, y + 2); yy++)
+          for (let xx = Math.max(0, x - 2); xx <= Math.min(bw - 1, x + 2); xx++) {
+            const q = yy * bw + xx;
+            if (residue[q] && comp[q]! < 0) { comp[q] = c; stack.push(q); }
+          }
+      }
+      c++;
+      if (pix.length < Math.max(60, r.area * 0.002)) continue;
+      // Its colour against the body right where it joins (body pixels within a few px).
+      const near = new Set<number>();
+      let frontier = pix;
+      for (let it = 0; it < 4; it++) {
+        const nxt: number[] = [];
+        for (const j of frontier) {
+          const x = j % bw, y = (j / bw) | 0;
+          for (const q of [x > 0 ? j - 1 : -1, x < bw - 1 ? j + 1 : -1, y > 0 ? j - bw : -1, y < bh - 1 ? j + bw : -1])
+            if (q >= 0 && mask[q] && !residue[q] && !near.has(q)) { near.add(q); nxt.push(q); }
+        }
+        frontier = nxt;
+      }
+      if (near.size < 10) continue; // not attached to the body: leave it
+      const mean = (js: Iterable<number>) => {
+        const m = [0, 0, 0];
+        let cnt = 0;
+        for (const j of js) { const i = ((j / bw) | 0) * width + r.y0 * width + (j % bw) + r.x0; for (let k = 0; k < 3; k++) m[k]! += lab[i * 3 + k]!; cnt++; }
+        return m.map((v) => v / Math.max(1, cnt));
+      };
+      const own = mean(pix);
+      if (dE(own, 0, mean(near), 0) < 18 && dE(own, 0, bodyMean(), 0) < 25) continue;
+      const id = nextId++;
+      let x0 = Infinity, y0 = Infinity, x1 = -1, y1 = -1;
+      const sum = [0, 0, 0], sumL = [0, 0, 0];
+      for (const j of pix) {
+        const x = (j % bw) + r.x0, y = ((j / bw) | 0) + r.y0, i = y * width + x;
+        labels[i] = id;
+        if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+        for (let k = 0; k < 3; k++) { sum[k]! += rgb[i * 3 + k]!; sumL[k]! += lab[i * 3 + k]!; }
+      }
+      const m = pix.length;
+      const rgbM = sum.map((v) => v / m) as [number, number, number];
+      regions.set(id, { id, area: m, lab: sumL.map((v) => v / m) as [number, number, number], rgb: rgbM, x0, y0, x1, y1, background: false, model: { kind: "flat", rgb: rgbM } });
+      r.area -= m;
+    }
+  }
+  return nextId;
 }
 
 // ---------- edge pixels ----------
 
 type Share = { a: number; wa: number; b: number; wb: number };
 
-/** Splits each edge pixel between the two regions whose colours mix to make it. */
+/**
+ * Splits each edge pixel between the two regions whose colours mix to make it. On opaque
+ * images this covers a band a few px either side of every boundary, and each side's colour is
+ * read from its own pixels just beyond the band: soft, shaded edges then get a true sub-pixel
+ * outline instead of one that wobbles with the region's overall gradient.
+ */
 function shareEdges(seg: Segmentation): Map<number, Share> {
   const { width, height, labels, regions, rgb, alpha, transparent } = seg;
   const shares = new Map<number, Share>();
+  // Soft edges can leave several px of unassigned pixels between two regions, so candidates
+  // are looked for a little further out than the band.
+  const BAND = 2, LOCAL = 7, REACH = transparent ? 2 : 4;
+  const band = new Uint8Array(labels.length);
+  if (!transparent) {
+    const edge = new Uint8Array(labels.length);
+    for (let i = 0; i < labels.length; i++) {
+      const l = labels[i]!, x = i % width, y = (i / width) | 0;
+      if (l === -1 || (x > 0 && labels[i - 1] !== l) || (x < width - 1 && labels[i + 1] !== l) || (y > 0 && labels[i - width] !== l) || (y < height - 1 && labels[i + width] !== l))
+        edge[i] = 1;
+    }
+    for (let i = 0; i < labels.length; i++) {
+      if (!edge[i]) continue;
+      const x = i % width, y = (i / width) | 0;
+      for (let yy = Math.max(0, y - BAND); yy <= Math.min(height - 1, y + BAND); yy++)
+        for (let xx = Math.max(0, x - BAND); xx <= Math.min(width - 1, x + BAND); xx++) band[yy * width + xx] = 1;
+    }
+  }
+  /** Mean colour of a region's own pixels near (x, y), outside the band; model colour if none. */
+  const localColor = (id: number, x: number, y: number): [number, number, number] => {
+    const m = [0, 0, 0];
+    let cnt = 0;
+    for (let yy = Math.max(0, y - LOCAL); yy <= Math.min(height - 1, y + LOCAL); yy++)
+      for (let xx = Math.max(0, x - LOCAL); xx <= Math.min(width - 1, x + LOCAL); xx++) {
+        const j = yy * width + xx;
+        if (labels[j] !== id || band[j]) continue;
+        m[0]! += rgb[j * 3]!; m[1]! += rgb[j * 3 + 1]!; m[2]! += rgb[j * 3 + 2]!;
+        cnt++;
+      }
+    return cnt >= 3 ? [m[0]! / cnt, m[1]! / cnt, m[2]! / cnt] : modelColor(regions.get(id)!, x, y);
+  };
   for (let i = 0; i < labels.length; i++) {
     const lab = labels[i]!;
-    const edge = lab === -1 || (transparent && lab === 0 && alpha[i]! > 0.02);
+    const edge = lab === -1 || band[i] === 1 || (transparent && lab === 0 && alpha[i]! > 0.02);
     if (!edge) continue;
     const x = i % width, y = (i / width) | 0;
     const cand = new Set<number>();
-    for (let dy = -2; dy <= 2; dy++)
-      for (let dx = -2; dx <= 2; dx++) {
+    for (let dy = -REACH; dy <= REACH; dy++)
+      for (let dx = -REACH; dx <= REACH; dx++) {
         const xx = x + dx, yy = y + dy;
         if (xx < 0 || yy < 0 || xx >= width || yy >= height) continue;
         const l = labels[yy * width + xx]!;
@@ -399,7 +455,7 @@ function shareEdges(seg: Segmentation): Map<number, Share> {
       }
     if (!cand.size) continue;
     const p = [rgb[i * 3]!, rgb[i * 3 + 1]!, rgb[i * 3 + 2]!];
-    const list = [...cand].map((id) => ({ id, c: modelColor(regions.get(id)!, x, y) }));
+    const list = [...cand].map((id) => ({ id, c: transparent ? modelColor(regions.get(id)!, x, y) : localColor(id, x, y) }));
     if (transparent) {
       // Alpha already says how much ink there is; colour picks which region it belongs to.
       let best = list[0]!, bestD = Infinity;
@@ -445,12 +501,9 @@ export function colorAdvice(seg: Segmentation): ColorAdvice {
   const colourful = main.filter((g) => chroma(g) > 15 && g.area / total >= 0.05);
   const maxChroma = Math.max(0, ...main.map(chroma));
   const gradients = ink.filter((r) => {
-    if (r.model.kind !== "linear" || r.area / total < 0.01) return false;
-    const st = r.model.fill.type === "linear" ? r.model.fill.stops : [];
-    const a = st[0], b = st[st.length - 1];
-    if (!a || !b) return false;
-    const la = labOf(...rgbOf(a.color)), lb = labOf(...rgbOf(b.color));
-    return dE(la, 0, lb, 0) >= 8;
+    if (r.model.kind !== "shaded" || r.model.fill.type === "solid" || r.area / total < 0.01) return false;
+    const labs = r.model.fill.stops.map((st) => labOf(...rgbOf(st.color)));
+    return labs.some((l) => dE(l, 0, labs[0]!, 0) >= 8);
   }).length;
   let score = 0;
   if (colourful.length) score += 35 + Math.min(25, maxChroma * 0.4);
@@ -467,11 +520,6 @@ export function colorAdvice(seg: Segmentation): ColorAdvice {
         ? "Black, white or near-neutral — nothing is lost in black & white"
         : "One muted colour — black & white keeps the shape";
   return { recommend, score, colors: n, gradients, palette, reason };
-}
-
-function rgbOf(h: string): [number, number, number] {
-  const v = parseInt(h.slice(1), 16);
-  return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
 }
 
 /** Quick advice from a downscaled copy (cheap enough to run on every trace). */
@@ -503,7 +551,7 @@ export function adviseColor(rgba: Uint8ClampedArray, width: number, height: numb
 export type ColorTrace = { layers: ColorLayer[]; advice: ColorAdvice };
 
 export function traceColor(rgba: Uint8ClampedArray, width: number, height: number, targetLongSide = 2000): ColorTrace {
-  const seg = segment(rgba, width, height);
+  const seg = segment(rgba, width, height, { shading: true });
   const shares = shareEdges(seg);
   const advice = colorAdvice(seg);
   const { labels, regions, alpha, transparent } = seg;
@@ -512,16 +560,19 @@ export function traceColor(rgba: Uint8ClampedArray, width: number, height: numbe
   const ink = [...regions.values()].filter((r) => !r.background).sort((a, b) => b.area - a.area);
   const order = new Map(ink.map((r, i) => [r.id, i]));
   const own = (i: number, id: number) => {
-    if (labels[i] === id) return transparent ? alpha[i]! : 1;
     const s = shares.get(i);
-    return s ? (s.a === id ? s.wa : 0) + (s.b === id ? s.wb : 0) : 0;
+    if (s) return (s.a === id ? s.wa : 0) + (s.b === id ? s.wb : 0);
+    return labels[i] === id ? (transparent ? alpha[i]! : 1) : 0;
   };
   /** Coverage of regions drawn above `rank` at pixel i (for the seam-hiding overlap). */
   const above = (i: number, rank: number) => {
-    const l = labels[i]!;
-    if (l > 0) { const o = order.get(l); return o !== undefined && o > rank ? (transparent ? alpha[i]! : 1) : 0; }
     const s = shares.get(i);
-    if (!s) return 0;
+    const l = labels[i]!;
+    if (!s) {
+      if (l <= 0) return 0;
+      const o = order.get(l);
+      return o !== undefined && o > rank ? (transparent ? alpha[i]! : 1) : 0;
+    }
     let v = 0;
     const oa = order.get(s.a), ob = order.get(s.b);
     if (oa !== undefined && oa > rank) v += s.wa;
@@ -567,8 +618,10 @@ export function traceColor(rgba: Uint8ClampedArray, width: number, height: numbe
       start: shift(p.start),
       segments: p.segments.map((s) => (s.type === "L" ? { type: "L" as const, to: shift(s.to) } : { type: "C" as const, c1: shift(s.c1), c2: shift(s.c2), to: shift(s.to) })),
     }));
-    const fill: Fill = r.model.kind === "linear" ? r.model.fill : { type: "solid", color: hex(...r.model.rgb) };
+    const fill: Fill = r.model.kind === "shaded" ? r.model.fill : { type: "solid", color: hex(...r.model.rgb) };
     layers.push({ paths, fill });
+    // Highlights and shadows: the same outline again, filled with gradients that fade out.
+    if (r.model.kind === "shaded") for (const o of r.model.overlays) layers.push({ paths, fill: o });
   }
   return { layers, advice };
 }
@@ -580,21 +633,45 @@ const num = (n: number) => {
   return Object.is(r, -0) ? "0" : String(r);
 };
 
+/** Short content hash (FNV-1a over the fills and first points) for gradient ids. */
+function idHash(layers: ColorLayer[]) {
+  let h = 0x811c9dc5;
+  const add = (v: string) => { for (let k = 0; k < v.length; k++) h = Math.imul(h ^ v.charCodeAt(k), 0x01000193); };
+  for (const l of layers) {
+    add(JSON.stringify(l.fill));
+    const p = l.paths[0];
+    if (p) add(`${num(p.start.x)},${num(p.start.y)},${p.segments.length}`);
+  }
+  return (h >>> 0).toString(36);
+}
+
+/** Scales an elliptical radial gradient vertically about its centre (SVG matrix form). */
+export function radialTransform(f: { cy: number; sy: number }) {
+  return `matrix(1 0 0 ${num(f.sy)} 0 ${num(f.cy * (1 - f.sy))})`;
+}
+
 /** One path per layer, back to front; gradients in <defs>, in source-pixel units. */
 export function toLayeredSvg(layers: ColorLayer[], width: number, height: number, view = { x: 0, y: 0, width, height }) {
   const display = Math.max(1, 1024 / Math.max(view.width, view.height));
   const defs: string[] = [];
+  // Gradient ids are unique per drawing, so two exported SVGs pasted into one page don't clash.
+  const prefix = `v${idHash(layers)}`;
   const body = layers.map((layer, i) => {
     let fill: string;
     if (layer.fill.type === "solid") fill = layer.fill.color;
     else {
       const f = layer.fill;
+      const stops = f.stops
+        .map((s) => `<stop offset="${num(s.offset)}" stop-color="${s.color}"${s.opacity !== undefined && s.opacity < 1 ? ` stop-opacity="${num(s.opacity)}"` : ""}/>`)
+        .join("");
       defs.push(
-        `<linearGradient id="g${i}" gradientUnits="userSpaceOnUse" x1="${num(f.x1)}" y1="${num(f.y1)}" x2="${num(f.x2)}" y2="${num(f.y2)}">` +
-          f.stops.map((s) => `<stop offset="${num(s.offset)}" stop-color="${s.color}"/>`).join("") +
-          `</linearGradient>`,
+        f.type === "linear"
+          ? `<linearGradient id="${prefix}g${i}" gradientUnits="userSpaceOnUse" x1="${num(f.x1)}" y1="${num(f.y1)}" x2="${num(f.x2)}" y2="${num(f.y2)}">${stops}</linearGradient>`
+          : `<radialGradient id="${prefix}g${i}" gradientUnits="userSpaceOnUse" cx="${num(f.cx)}" cy="${num(f.cy)}" r="${num(f.r)}"` +
+              (Math.abs(f.sy - 1) > 1e-3 ? ` gradientTransform="${radialTransform(f)}"` : "") +
+              `>${stops}</radialGradient>`,
       );
-      fill = `url(#g${i})`;
+      fill = `url(#${prefix}g${i})`;
     }
     return `<path fill="${fill}" fill-rule="evenodd" d="${pathData(layer.paths)}"/>`;
   });
